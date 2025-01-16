@@ -16,13 +16,21 @@ def create_antenna_array():
         num_rows=1,
         num_cols=MIMO_CONFIG["tx_antennas"],
         polarization=MIMO_CONFIG["polarization"],
-        element_spacing=MIMO_CONFIG["element_spacing"],
+        polarization_type="V",  # Add this parameter
+        antenna_pattern="38.901",  # Add this parameter
+        carrier_frequency=RESOURCE_GRID["bandwidth"],
+        vertical_spacing=MIMO_CONFIG["element_spacing"],    # Changed from element_spacing
+        horizontal_spacing=MIMO_CONFIG["element_spacing"],  # Changed from element_spacing
     )
     rx_array = AntennaArray(
         num_rows=1,
         num_cols=MIMO_CONFIG["rx_antennas"],
         polarization=MIMO_CONFIG["polarization"],
-        element_spacing=MIMO_CONFIG["element_spacing"],
+        polarization_type="V",  # Add this parameter
+        antenna_pattern="38.901",  # Add this parameter
+        carrier_frequency=RESOURCE_GRID["bandwidth"],
+        vertical_spacing=MIMO_CONFIG["element_spacing"],    # Changed from element_spacing
+        horizontal_spacing=MIMO_CONFIG["element_spacing"],  # Changed from element_spacing
     )
     return tx_array, rx_array
 
