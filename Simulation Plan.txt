@@ -1,0 +1,53 @@
+% Simulation Plan
+% Sionna-Compatible
+
+% MIMO Configuration
+% Number of Tx Antennas: 4 (Fixed for initial setup - 4x4 MIMO)
+% Number of Rx Antennas: 4 (Fixed for initial setup - 4x4 MIMO)
+% Array Type: ULA (Uniform Linear Array)
+% Number of Streams: 4 (Equal to number of antennas)
+% Element Spacing: 0.5λ (Half wavelength spacing)
+% Polarization: Single (Single polarization for easier modeling.)
+% Antenna Gain: 5-15 dBi (Define gain levels for realistic signal strength modeling.)
+% Antenna Pattern: Directional (Use standard beam patterns provided by Sionna.)
+% Array Orientation: Fixed angles (Start with fixed azimuth/elevation angles to reduce simulation complexity.)
+
+% Resource Grid
+% Number of Subcarriers: 64 (Sionna standard config)
+% Subcarrier Spacing: 30 kHz (5G NR numerology 1)
+% Number of OFDM Symbols: 14 (One slot duration)
+% Symbol Duration: 71.4 μs (Including cyclic prefix)
+% Bandwidth: 2 MHz (Matches subcarrier spacing and number of subcarriers.)
+% Modulation Order: QPSK (Low-order modulation for baseline evaluation.)
+
+% Channel Model
+% Type: Rayleigh Block Fading (Supported in Sionna)
+% Number of Paths: 10 (For multipath simulation)
+% Coherence Time: 1 slot (Block fading assumption)
+% User: Static (RX devices like modem or fixed stations.)
+% Path Loss Models: FSPL (Implement Free Space Path Loss - FSPL)
+% SNR Range: 0 to 30 dB (Testing range)
+% Delay Spread: 0.1-1 μs (Simulate realistic channel time dispersion.)
+% Doppler Shift: 0 Hz (Doppler shift set to 0 Hz, no mobility/time-variation in channel modeling.)
+% Spatial Consistency: Static (no variations) (Keep channel static for predictable performance evaluation.)
+% Channel Model Configuration: 1.5m (Fixed antenna heights - 1.5m)
+% Interference Sources: None (Avoid interference for initial dataset.)
+
+% Training Parameters
+% Model: Soft Actor-Critic (SAC) (Actor Network - Policy Network | Critic Network - Twin Q-networks)
+% Channel Realizations: 1,320,000 (Initial training set)
+% Validation Set Size: 100K (For performance validation)
+% Test Set Size: 100K (For final evaluation)
+% Number of Episodes: 100K (Total training episodes)
+% Learning rate: actor_lr: 3e-4 (Learning rate for actor network)
+% Learning rate: critic_lr: 3e-4 (Learning rate for critic network)
+% Learning rate: alpha_lr: 3e-4 (Temperature parameter learning rate)
+% Discount Factor (Gamma): 0.99 (Standard discount factor for RL.)
+% Replay Buffer Size: 1M samples (To handle large-scale training.)
+% Mini-Batch Size: 256 (For gradient updates during training.)
+
+% Dataset Parameters
+% Antenna Heights: Fixed at 1.5m (Simulate typical fixed-user device height.)
+% Noise Floor: -174 dBm/Hz (Thermal noise baseline for calculations.)
+% Dataset Size (Samples): 1,320,000 (Balanced between computational complexity and training needs.)
+% Random Seed: Fixed for reproducibility (Ensure consistent dataset generation.)
