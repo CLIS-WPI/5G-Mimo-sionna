@@ -37,13 +37,11 @@ def create_antenna_array():
 # Define the channel model
 def create_channel_model():
     return RayleighBlockFading(
-        num_rx=MIMO_CONFIG["rx_antennas"],
-        num_tx=MIMO_CONFIG["tx_antennas"],
-        num_paths=CHANNEL_CONFIG["num_paths"],
-        coherence_time=CHANNEL_CONFIG["coherence_time"],
-        delay_spread=CHANNEL_CONFIG["delay_spread"],
-        doppler_frequency=CHANNEL_CONFIG["doppler_shift"],
-        carrier_frequency=RESOURCE_GRID["bandwidth"],
+        num_rx=1,  # Since we're using num_rx_ant for the actual antenna count
+        num_rx_ant=MIMO_CONFIG["rx_antennas"],
+        num_tx=1,  # Since we're using num_tx_ant for the actual antenna count
+        num_tx_ant=MIMO_CONFIG["tx_antennas"],
+        dtype=tf.complex64
     )
 
 # Generate the dataset
