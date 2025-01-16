@@ -1,7 +1,39 @@
-#############################
+###################################################################################################################
+#src/config.py
 # Configuration File
 # For Dataset Generation in Sionna based on Simulation Plan.txt
-#############################
+#####################################################################################################################
+# Configuration File for Dataset Generation in Sionna
+# This file contains the configurations necessary for generating simulated channel datasets
+# using the Sionna library, which is based on the simulation plan described in "Simulation Plan.txt".
+# The datasets are used for training and validating machine learning models in MIMO (Multiple Input, Multiple Output) systems.
+#
+# Purpose:
+# This configuration file provides parameters for:
+# 1. General settings such as the dataset size, random seed, and noise floor.
+# 2. MIMO system settings including transmit and receive antenna configurations.
+# 3. Resource grid specifications for generating OFDM symbols and subcarriers.
+# 4. Channel model settings for simulating Rayleigh block fading channels and various propagation conditions.
+# 5. Simulation settings for generating batches of channel realizations using Sionna.
+#
+# Inputs:
+# - CONFIG: General configurations including dataset size and output directory.
+# - MIMO_CONFIG: Defines the MIMO system setup such as the number of antennas, polarization, and spacing.
+# - RESOURCE_GRID: Contains OFDM-related configurations such as subcarriers, bandwidth, and modulation format.
+# - CHANNEL_CONFIG: Defines channel model parameters like the type of fading model, SNR range, and delay spread.
+# - SIONNA_CONFIG: Specifies simulation parameters such as batch size and parallel workers.
+#
+# Outputs:
+# - OUTPUT_FILES: Paths to the output files where the generated dataset will be saved. This includes:
+#   - training_data.npy
+#   - validation_data.npy
+#   - test_data.npy
+#
+# This configuration allows for consistent dataset generation for training, validation, and testing
+# in reinforcement learning and other machine learning-based beamforming optimization tasks.
+#####################################################################################################################
+
+#####################################################################################################################
 
 # General Configuration
 CONFIG = {
@@ -11,7 +43,13 @@ CONFIG = {
     "validation_size": 100000,  # Number of validation samples
     "test_size": 100000,  # Number of test samples
     "noise_floor": -174,  # Noise floor in dBm/Hz
+    "number_of_episodes": 100,  # Number of training episodes
+    "mini_batch_size": 256,  # Mini-batch size for training
+    "actor_lr": 1e-4,  # Learning rate for the actor network
+    "critic_lr": 1e-3,  # Learning rate for the critic network
+    "alpha_lr": 1e-4,  # Learning rate for the alpha parameter
 }
+
 
 # MIMO Configuration
 MIMO_CONFIG = {

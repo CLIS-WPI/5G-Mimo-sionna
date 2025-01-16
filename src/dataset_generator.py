@@ -1,3 +1,37 @@
+#############################
+#/src/dataset_generator.py
+# Dataset Generation Script for Simulated MIMO Channel Realizations
+# This script generates synthetic datasets for training, validation, and testing
+# of machine learning models used in MIMO (Multiple Input, Multiple Output) systems. 
+# The dataset consists of channel realizations and corresponding Signal-to-Noise Ratio (SNR) values 
+# for different simulation conditions. The generated datasets are used for beamforming optimization 
+# tasks and reinforcement learning in the context of wireless communication systems.
+
+# Purpose:
+# This script performs the following tasks:
+# 1. Generates random SNR values within a specified range.
+# 2. Simulates MIMO channel realizations using a Rayleigh block fading model with predefined MIMO antenna configurations.
+# 3. Creates separate datasets for training, validation, and testing.
+# 4. Saves the datasets to the specified output files for later use in training machine learning models.
+#
+# Inputs:
+# - CONFIG: General configuration for dataset size, output directory, and noise floor.
+# - MIMO_CONFIG: MIMO antenna configuration, including the number of transmit and receive antennas, polarization, and spacing.
+# - RESOURCE_GRID: Resource grid configuration, including subcarriers, bandwidth, and modulation format.
+# - CHANNEL_CONFIG: Channel model configuration, including SNR range, fading model, and delay spread.
+# - SIONNA_CONFIG: Simulation settings including batch size and the number of realizations.
+#
+# Outputs:
+# - The script generates and saves datasets for training, validation, and testing:
+#   - channel_realizations: Simulated channel realizations (Rayleigh fading channels) for each sample.
+#   - snr: Corresponding Signal-to-Noise Ratio values for each realization.
+#   - The datasets are saved as `.npy` files at the paths specified in the OUTPUT_FILES dictionary.
+#
+# The script ensures that the required directories exist before saving the datasets and processes the data 
+# in batches to improve memory efficiency during simulation.
+
+#############################
+
 import os
 import numpy as np
 import tensorflow as tf
@@ -65,7 +99,11 @@ def generate_dataset(output_file, num_samples):
         snrs = np.random.uniform(CHANNEL_CONFIG["snr_range"][0], CHANNEL_CONFIG["snr_range"][1], SIONNA_CONFIG["batch_size"])
 
         # Generate channel realizations
-        channels = channel(batch_size=SIONNA_CONFIG["batch_size"], tx_array=tx_array, rx_array=rx_array)
+        # Modified this line to use correct parameters
+        channels, _ = channel(
+            batch_size=SIONNA_CONFIG["batch_size"],
+            num_time_steps=1  # For block fading, we can use 1 time step
+        )
 
         # Append to dataset
         dataset["channel_realizations"].append(channels.numpy())

@@ -1,0 +1,15 @@
+# Ignore all datasets
+
+# Ignore virtual environments
+sionna_env/
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Ignore large files
+*.h5
+*.log
+*.xlsx  # Ignore all Excel files
+*.npy
+.codegpt
