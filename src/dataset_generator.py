@@ -42,7 +42,7 @@ from sionna.mimo import StreamManagement
 from sionna.mimo.precoding import zero_forcing_precoder, normalize_precoding_power
 from utill.utils import db2lin, lin2db
 from config import CONFIG, MIMO_CONFIG, RESOURCE_GRID, CHANNEL_CONFIG, SIONNA_CONFIG, OUTPUT_FILES
-
+from sionna.ofdm import ResourceGrid
 # Ensure output directories exist
 os.makedirs(os.path.dirname(OUTPUT_FILES["training_data"]), exist_ok=True)
 os.makedirs(os.path.dirname(OUTPUT_FILES["validation_data"]), exist_ok=True)
@@ -70,6 +70,23 @@ def create_antenna_array():
         horizontal_spacing=MIMO_CONFIG["element_spacing"],
     )
     return tx_array, rx_array
+
+rg = ResourceGrid(
+    # Required parameters
+    num_ofdm_symbols=RESOURCE_GRID["ofdm_symbols"],     # Must be specified
+    fft_size=RESOURCE_GRID["subcarriers"],              # FFT size
+    subcarrier_spacing=RESOURCE_GRID["subcarrier_spacing"], 
+    
+    # Optional parameters (with your config values)
+    num_guard_carriers=RESOURCE_GRID["num_guard_carriers"],  # Tuple of (left, right) guards
+    dc_null=RESOURCE_GRID["dc_null"],                       # Boolean for DC nulling
+    
+    # Other optional parameters with default values
+    num_tx=1,                     # Number of transmitters
+    num_streams_per_tx=1,         # Streams per transmitter
+    cyclic_prefix_length=0,       # CP length
+    pilot_pattern="empty"         # Pilot pattern configuration
+)
 
 def create_stream_management(num_users):
     """Create stream management for multi-user scenario"""
@@ -100,19 +117,35 @@ def calculate_sinr(desired_signal, interference_signals, noise_power):
     return lin2db(sinr), interference_power  # Return both SINR and interference in dB
 
 def create_channel_model(num_users):
-    """Create channel model with proper number of users"""
+    """Create channel model with proper number of users and Doppler configuration"""
+    # Calculate maximum Doppler shift based on speed and carrier frequency
+    doppler_params = CHANNEL_CONFIG["doppler_shift"]
+    
     return RayleighBlockFading(
         num_rx=num_users,
         num_rx_ant=MIMO_CONFIG["rx_antennas"],
         num_tx=1,
         num_tx_ant=MIMO_CONFIG["tx_antennas"],
-        dtype=tf.complex64
+        dtype=tf.complex64,
+        maximum_speed=doppler_params["max_speed"],  # Add maximum speed
+        carrier_frequency=doppler_params["carrier_frequency"]  # Add carrier frequency
     )
+
+def calculate_coherence_time():
+    """Calculate channel coherence time based on Doppler parameters"""
+    max_doppler = 2 * np.pi * CHANNEL_CONFIG["doppler_shift"]["max_speed"] / \
+                 sionna.SPEED_OF_LIGHT * CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
+    return 1 / max_doppler
+
+# Use this in generate_dataset when generating channel realizations:
+coherence_time = calculate_coherence_time()
 
 def generate_dataset(output_file, num_samples):
     """Generate dataset with improved SINR calculation and multi-user support"""
     print(f"Generating dataset: {output_file} with {num_samples} samples...")
-    
+    # Create resource grid
+    resource_grid = create_resource_grid()
+
     # Create antenna arrays
     tx_array, rx_array = create_antenna_array()
     
@@ -120,18 +153,33 @@ def generate_dataset(output_file, num_samples):
     num_users = CONFIG.get("num_users", 4)
     stream_management = create_stream_management(num_users)
     
-    # Create channel model
-    channel = create_channel_model(num_users)
+    # Create channel model with OFDM parameters and Doppler effects
+    channel = OFDMChannel(
+        channel_model=create_channel_model(num_users),
+        resource_grid=resource_grid,
+        add_awgn=True,
+        dtype=tf.complex64,
+        normalize_channel=True,
+        # Add sampling time based on OFDM parameters
+        sampling_frequency=RESOURCE_GRID["subcarrier_spacing"] * RESOURCE_GRID["subcarriers"]
+    )
     
-    # Initialize dataset dictionary
+    # Update dataset dictionary to include Doppler information
     dataset = {
         "channel_realizations": [],
         "snr": [],
         "sinr": [],
         "interference": [],
         "user_association": [],
-        "precoding_matrices": []
+        "precoding_matrices": [],
+        "doppler_info": {  # Add Doppler information
+            "max_speed": CHANNEL_CONFIG["doppler_shift"]["max_speed"],
+            "min_speed": CHANNEL_CONFIG["doppler_shift"]["min_speed"],
+            "carrier_frequency": CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
+        }
     }
+    
+    # ... (rest of the existing code) ...
     
     # Calculate noise power from noise floor
     noise_power = db2lin(CONFIG["noise_floor"])

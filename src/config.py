@@ -77,13 +77,16 @@ MIMO_CONFIG = {
 
 # Resource Grid Configuration
 RESOURCE_GRID = {
-    "subcarriers": 64,  # Number of subcarriers
-    "subcarrier_spacing": 30e3,  # Subcarrier spacing in Hz
+    "subcarriers": 64,  # fft_size
+    "subcarrier_spacing": 30e3,  # In Hz
     "ofdm_symbols": 14,  # Number of OFDM symbols per slot
     "symbol_duration": 71.4e-6,  # Duration of one symbol in seconds
     "bandwidth": 2e6,  # Bandwidth in Hz
     "modulation_order": "QPSK",  # Modulation format
+    "num_guard_carriers": (5, 6),  # Guard carriers left/right (based on typical LTE/5G settings)
+    "dc_null": True  # Null the DC subcarrier
 }
+
 
 # Channel Model Configuration
 CHANNEL_CONFIG = {
@@ -94,7 +97,11 @@ CHANNEL_CONFIG = {
     "path_loss_model": "FSPL",  # Free space path loss model
     "snr_range": (10, 30),  # Change from (0,30) to (10,30) for better SNR
     "delay_spread": (0.1e-6, 0.5e-6),  # Reduce max delay spread
-    "doppler_shift": 0,  # Doppler shift for static scenario
+    "doppler_shift": {
+        "min_speed": 0.1,  # m/s (minimum speed to avoid purely static scenario)
+        "max_speed": 5.0,  # m/s (typical pedestrian speed)
+        "carrier_frequency": 3.5e9,  # Hz (carrier frequency in Hz)
+        },
     "spatial_consistency": "static",  # No variations in channel
     "antenna_height": 1.5,  # Fixed antenna height in meters
     "interference": {
