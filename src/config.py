@@ -98,8 +98,8 @@ CHANNEL_CONFIG = {
     "snr_range": (10, 30),  # Change from (0,30) to (10,30) for better SNR
     "delay_spread": (0.1e-6, 0.5e-6),  # Reduce max delay spread
     "doppler_shift": {
-        "min_speed": 0.1,  # m/s (minimum speed to avoid purely static scenario)
-        "max_speed": 5.0,  # m/s (typical pedestrian speed)
+        "min_speed": 0.0,  # m/s (minimum speed to avoid purely static scenario)
+        "max_speed": 30.0,  # m/s (typical pedestrian speed)
         "carrier_frequency": 3.5e9,  # Hz (carrier frequency in Hz)
         },
     "spatial_consistency": "static",  # No variations in channel

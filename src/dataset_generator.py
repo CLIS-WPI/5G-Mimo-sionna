@@ -41,7 +41,7 @@ from sionna.channel import OFDMChannel, RayleighBlockFading
 from sionna.channel.tr38901 import AntennaArray
 from sionna.mimo import StreamManagement
 from sionna.mimo.precoding import zero_forcing_precoder, normalize_precoding_power
-from utill.utils import calculate_path_loss, snr_to_noise_power, verify_power_levels
+from utill.utils import db2lin, lin2db
 from config import CONFIG, MIMO_CONFIG, RESOURCE_GRID, CHANNEL_CONFIG, SIONNA_CONFIG, OUTPUT_FILES
 from sionna.ofdm import ResourceGrid
 # Ensure output directories exist
@@ -118,18 +118,13 @@ def calculate_sinr(desired_signal, interference_signals, noise_power):
     return lin2db(sinr), interference_power  # Return both SINR and interference in dB
 
 def create_channel_model(num_users):
-    """Create channel model with proper number of users and Doppler configuration"""
-    # Calculate maximum Doppler shift based on speed and carrier frequency
-    doppler_params = CHANNEL_CONFIG["doppler_shift"]
-    
+    """Create channel model with proper number of users"""
     return RayleighBlockFading(
         num_rx=num_users,
         num_rx_ant=MIMO_CONFIG["rx_antennas"],
         num_tx=1,
         num_tx_ant=MIMO_CONFIG["tx_antennas"],
-        dtype=tf.complex64,
-        maximum_speed=doppler_params["max_speed"],  # Add maximum speed
-        carrier_frequency=doppler_params["carrier_frequency"]  # Add carrier frequency
+        dtype=tf.complex64
     )
 
 def calculate_coherence_time():
@@ -197,7 +192,10 @@ def generate_dataset(output_file, num_samples):
         add_awgn=True,
         dtype=tf.complex64,
         normalize_channel=True,
-        sampling_frequency=sampling_frequency  # Add calculated sampling frequency
+        sampling_frequency=sampling_frequency,
+        # Add Doppler configuration here if needed
+        maximum_doppler_freq=2 * np.pi * CHANNEL_CONFIG["doppler_shift"]["max_speed"] / \
+                            SPEED_OF_LIGHT * CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
     )
     
     # Update dataset dictionary to include Doppler information
