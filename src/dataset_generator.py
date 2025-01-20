@@ -152,7 +152,7 @@ def validate_doppler_params():
     """Validate Doppler shift parameters"""
     try:
         doppler_params = CHANNEL_CONFIG["doppler_shift"]
-        assert doppler_params["min_speed"] > 0, "Minimum speed must be positive"
+        assert doppler_params["min_speed"] >= 0, "Minimum speed must be non-negative"  # Changed from > 0 to >= 0
         assert doppler_params["max_speed"] > doppler_params["min_speed"], \
             "Maximum speed must be greater than minimum speed"
         assert doppler_params["carrier_frequency"] > 0, "Carrier frequency must be positive"
