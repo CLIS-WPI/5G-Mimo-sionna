@@ -128,10 +128,10 @@ def create_channel_model(num_users):
     
     # Calculate maximum Doppler shift based on speed and carrier frequency
     max_doppler = 2 * np.pi * CHANNEL_CONFIG["doppler_shift"]["max_speed"] / \
-                 sionna.SPEED_OF_LIGHT * CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
+                 SPEED_OF_LIGHT * CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
     
     min_doppler = 2 * np.pi * CHANNEL_CONFIG["doppler_shift"]["min_speed"] / \
-                 sionna.SPEED_OF_LIGHT * CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
+                 SPEED_OF_LIGHT * CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
     
     return RayleighBlockFading(
         num_rx=num_users,
@@ -194,9 +194,6 @@ def generate_dataset(output_file, num_samples):
 
     # Validate Doppler parameters
     validate_doppler_params()
-
-    # Create stream management
-    stream_management = create_stream_management(num_users)
 
     # Create channel model with OFDM parameters
     channel = OFDMChannel(
