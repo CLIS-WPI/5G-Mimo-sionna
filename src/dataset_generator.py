@@ -208,7 +208,6 @@ def generate_dataset(output_file, num_samples):
             "carrier_frequency": CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
         }
     }
-    
 
     # Calculate noise power from noise floor
     noise_power = db2lin(CONFIG["noise_floor"])
@@ -216,6 +215,15 @@ def generate_dataset(output_file, num_samples):
     # Create base user association matrix (one-hot encoding)
     base_user_association = np.eye(num_users)
     
+    # Create dummy input tensor for channel model
+    dummy_input = tf.zeros([
+        SIONNA_CONFIG["batch_size"],  # batch size
+        1,                            # num_tx
+        MIMO_CONFIG["tx_antennas"],   # num_tx_ant
+        RESOURCE_GRID["ofdm_symbols"],# num_ofdm_symbols
+        RESOURCE_GRID["subcarriers"]  # fft_size
+    ], dtype=tf.complex64)
+
     # Generate data in batches
     for batch in range(num_samples // SIONNA_CONFIG["batch_size"]):
         batch_size = SIONNA_CONFIG["batch_size"]
@@ -228,13 +236,13 @@ def generate_dataset(output_file, num_samples):
         )
         
         # Generate channel realizations
-        channels = channel(
-            batch_size=batch_size,
-            num_time_steps=RESOURCE_GRID["ofdm_symbols"]
-        )
+        channels = channel((dummy_input, noise_power))
+        
+        # Handle the case where channels is a tuple
         if isinstance(channels, tuple):
             channels, _ = channels
         
+        # Convert to numpy array for storage
         channels = channels.numpy()
         
         # Initialize arrays for SINR and interference calculations
