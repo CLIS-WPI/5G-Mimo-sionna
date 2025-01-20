@@ -31,12 +31,16 @@
 # in batches to improve memory efficiency during simulation.
 
 #############################
-
 import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import tensorflow as tf
 from sionna.channel import OFDMChannel, RayleighBlockFading
 from sionna.channel.tr38901 import AntennaArray
+from sionna.mimo import StreamManagement
+from sionna.mimo.precoding import zero_forcing_precoder, normalize_precoding_power
+from utill.utils import db2lin, lin2db
 from config import CONFIG, MIMO_CONFIG, RESOURCE_GRID, CHANNEL_CONFIG, SIONNA_CONFIG, OUTPUT_FILES
 
 # Ensure output directories exist
@@ -44,83 +48,200 @@ os.makedirs(os.path.dirname(OUTPUT_FILES["training_data"]), exist_ok=True)
 os.makedirs(os.path.dirname(OUTPUT_FILES["validation_data"]), exist_ok=True)
 os.makedirs(os.path.dirname(OUTPUT_FILES["test_data"]), exist_ok=True)
 
-# Define the Antenna Array
 def create_antenna_array():
     tx_array = AntennaArray(
         num_rows=1,
         num_cols=MIMO_CONFIG["tx_antennas"],
         polarization=MIMO_CONFIG["polarization"],
-        polarization_type="V",  # Add this parameter
-        antenna_pattern="38.901",  # Add this parameter
+        polarization_type="V",  
+        antenna_pattern="38.901",  
         carrier_frequency=RESOURCE_GRID["bandwidth"],
-        vertical_spacing=MIMO_CONFIG["element_spacing"],    # Changed from element_spacing
-        horizontal_spacing=MIMO_CONFIG["element_spacing"],  # Changed from element_spacing
+        vertical_spacing=MIMO_CONFIG["element_spacing"],
+        horizontal_spacing=MIMO_CONFIG["element_spacing"],
     )
     rx_array = AntennaArray(
         num_rows=1,
         num_cols=MIMO_CONFIG["rx_antennas"],
         polarization=MIMO_CONFIG["polarization"],
-        polarization_type="V",  # Add this parameter
-        antenna_pattern="38.901",  # Add this parameter
+        polarization_type="V",  
+        antenna_pattern="38.901",  
         carrier_frequency=RESOURCE_GRID["bandwidth"],
-        vertical_spacing=MIMO_CONFIG["element_spacing"],    # Changed from element_spacing
-        horizontal_spacing=MIMO_CONFIG["element_spacing"],  # Changed from element_spacing
+        vertical_spacing=MIMO_CONFIG["element_spacing"],
+        horizontal_spacing=MIMO_CONFIG["element_spacing"],
     )
     return tx_array, rx_array
 
-# Define the channel model
-def create_channel_model():
+def create_stream_management(num_users):
+    """Create stream management for multi-user scenario"""
+    rx_tx_association = np.zeros([num_users, MIMO_CONFIG["tx_antennas"]])
+    # Assign each transmitter to a receiver (round-robin)
+    for i in range(MIMO_CONFIG["tx_antennas"]):
+        rx_tx_association[i % num_users, i] = 1
+    
+    return StreamManagement(rx_tx_association, num_streams_per_tx=1)
+
+def calculate_sinr(desired_signal, interference_signals, noise_power):
+    # Calculate signal power with antenna gain
+    signal_power = np.abs(desired_signal)**2 * db2lin(MIMO_CONFIG["antenna_gain"])
+    
+    # Calculate interference power directly in dB scale
+    interference_power = np.random.uniform(
+        CHANNEL_CONFIG["interference"]["interference_power_range"][0],
+        CHANNEL_CONFIG["interference"]["interference_power_range"][1],
+        size=signal_power.shape
+    )
+    
+    # Convert interference from dB to linear for SINR calculation
+    interference_power_linear = db2lin(interference_power)
+    
+    # Calculate SINR
+    sinr = signal_power / (interference_power_linear + noise_power)
+    
+    return lin2db(sinr), interference_power  # Return both SINR and interference in dB
+
+def create_channel_model(num_users):
+    """Create channel model with proper number of users"""
     return RayleighBlockFading(
-        num_rx=1,  # Since we're using num_rx_ant for the actual antenna count
+        num_rx=num_users,
         num_rx_ant=MIMO_CONFIG["rx_antennas"],
-        num_tx=1,  # Since we're using num_tx_ant for the actual antenna count
+        num_tx=1,
         num_tx_ant=MIMO_CONFIG["tx_antennas"],
         dtype=tf.complex64
     )
 
-# Generate the dataset
 def generate_dataset(output_file, num_samples):
+    """Generate dataset with improved SINR calculation and multi-user support"""
     print(f"Generating dataset: {output_file} with {num_samples} samples...")
-
-    # Create the antenna arrays
+    
+    # Create antenna arrays
     tx_array, rx_array = create_antenna_array()
-
-    # Create the channel model
-    channel = create_channel_model()
-
-    # Initialize arrays for dataset
+    
+    # Set number of users and create stream management
+    num_users = CONFIG.get("num_users", 4)
+    stream_management = create_stream_management(num_users)
+    
+    # Create channel model
+    channel = create_channel_model(num_users)
+    
+    # Initialize dataset dictionary
     dataset = {
         "channel_realizations": [],
         "snr": [],
+        "sinr": [],
+        "interference": [],
+        "user_association": [],
+        "precoding_matrices": []
     }
-
-    for _ in range(num_samples // SIONNA_CONFIG["batch_size"]):
-        # Generate random SNRs
-        snrs = np.random.uniform(CHANNEL_CONFIG["snr_range"][0], CHANNEL_CONFIG["snr_range"][1], SIONNA_CONFIG["batch_size"])
-
-        # Generate channel realizations
-        # Modified this line to use correct parameters
-        channels, _ = channel(
-            batch_size=SIONNA_CONFIG["batch_size"],
-            num_time_steps=1  # For block fading, we can use 1 time step
+    
+    # Calculate noise power from noise floor
+    noise_power = db2lin(CONFIG["noise_floor"])
+    
+    # Create base user association matrix (one-hot encoding)
+    base_user_association = np.eye(num_users)
+    
+    # Generate data in batches
+    for batch in range(num_samples // SIONNA_CONFIG["batch_size"]):
+        batch_size = SIONNA_CONFIG["batch_size"]
+        
+        # Generate SNRs
+        snrs = np.random.uniform(
+            CHANNEL_CONFIG["snr_range"][0],
+            CHANNEL_CONFIG["snr_range"][1],
+            batch_size
         )
-
-        # Append to dataset
-        dataset["channel_realizations"].append(channels.numpy())
+        
+        # Generate channel realizations
+        channels = channel(
+            batch_size=batch_size,
+            num_time_steps=1
+        )
+        if isinstance(channels, tuple):
+            channels, _ = channels
+        
+        channels = channels.numpy()
+        
+        # Initialize arrays for SINR and interference calculations
+        sinr_values = np.zeros((batch_size, num_users))
+        interference_values = np.zeros((batch_size, num_users))
+        
+        # Reshape channels to combine relevant dimensions
+        channels_reshaped = channels.reshape(
+            batch_size, 
+            num_users,
+            -1
+        )
+        
+        # Generate interference values directly in dB scale
+        interference_values = np.random.uniform(
+            CHANNEL_CONFIG["interference"]["interference_power_range"][0],
+            CHANNEL_CONFIG["interference"]["interference_power_range"][1],
+            (batch_size, num_users)
+        )
+        
+        # Process each user
+        for user in range(num_users):
+            # Calculate signal power for the current user
+            user_channel = channels_reshaped[:, user, :]
+            signal_power = np.sum(np.abs(user_channel)**2, axis=1)
+            
+            # Apply antenna gain
+            antenna_gain = MIMO_CONFIG["antenna_gain"]
+            if isinstance(antenna_gain, tuple):
+                antenna_gain = np.mean(antenna_gain)
+            signal_power *= db2lin(antenna_gain)
+            
+            # Convert interference from dB to linear for SINR calculation
+            interference_power_linear = db2lin(interference_values[:, user])
+            
+            # Calculate SINR
+            sinr = signal_power / (interference_power_linear + noise_power)
+            sinr_values[:, user] = lin2db(sinr)
+        
+        # Generate precoding matrices
+        precoding = np.random.normal(
+            0, 1/np.sqrt(2), 
+            (batch_size, MIMO_CONFIG["tx_antennas"], MIMO_CONFIG["rx_antennas"])
+        ) + 1j * np.random.normal(
+            0, 1/np.sqrt(2), 
+            (batch_size, MIMO_CONFIG["tx_antennas"], MIMO_CONFIG["rx_antennas"])
+        )
+        
+        # Create proper user association for this batch
+        user_association = np.tile(base_user_association, (batch_size, 1))
+        
+        # Append batch data to dataset
+        dataset["channel_realizations"].append(channels)
         dataset["snr"].append(snrs)
-
-    # Save the dataset to the specified output file
-    dataset["channel_realizations"] = np.concatenate(dataset["channel_realizations"], axis=0)
-    dataset["snr"] = np.concatenate(dataset["snr"], axis=0)
+        dataset["sinr"].append(sinr_values)
+        dataset["interference"].append(interference_values)
+        dataset["user_association"].append(user_association)
+        dataset["precoding_matrices"].append(precoding)
+        
+        if (batch + 1) % 10 == 0:
+            print(f"Processed batch {batch + 1}/{num_samples // SIONNA_CONFIG['batch_size']}")
+    
+    # Concatenate all batches
+    for key in dataset:
+        dataset[key] = np.concatenate(dataset[key], axis=0) if len(dataset[key]) > 0 else np.array([])
+    
+    # Save dataset
     np.save(output_file, dataset)
-    print(f"Dataset saved to {output_file}")
+    print(f"\nDataset saved to {output_file}")
+    print(f"Dataset statistics:")
+    print(f"Channel realizations shape: {dataset['channel_realizations'].shape}")
+    print(f"SNR shape: {dataset['snr'].shape}")
+    print(f"SINR shape: {dataset['sinr'].shape}")
+    print(f"Interference shape: {dataset['interference'].shape}")
+    print(f"User association shape: {dataset['user_association'].shape}")
+    print(f"Precoding matrices shape: {dataset['precoding_matrices'].shape}")
+    
+    # Verify interference range
+    print(f"Interference range: [{np.min(dataset['interference']):.2f}, {np.max(dataset['interference']):.2f}] dB")
+    
+    return dataset
 
 if __name__ == "__main__":
-    # Generate training dataset
+    # Generate all datasets
     generate_dataset(OUTPUT_FILES["training_data"], CONFIG["dataset_size"])
-
-    # Generate validation dataset
     generate_dataset(OUTPUT_FILES["validation_data"], CONFIG["validation_size"])
-
-    # Generate test dataset
     generate_dataset(OUTPUT_FILES["test_data"], CONFIG["test_size"])
