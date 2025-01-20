@@ -126,22 +126,12 @@ def calculate_max_doppler_freq():
 def create_channel_model(num_users):
     """Create channel model with proper Doppler configuration"""
     
-    # Calculate maximum Doppler shift based on speed and carrier frequency
-    max_doppler = 2 * np.pi * CHANNEL_CONFIG["doppler_shift"]["max_speed"] / \
-                 SPEED_OF_LIGHT * CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
-    
-    min_doppler = 2 * np.pi * CHANNEL_CONFIG["doppler_shift"]["min_speed"] / \
-                 SPEED_OF_LIGHT * CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
-    
     return RayleighBlockFading(
         num_rx=num_users,
         num_rx_ant=MIMO_CONFIG["rx_antennas"],
         num_tx=1,
         num_tx_ant=MIMO_CONFIG["tx_antennas"],
-        dtype=tf.complex64,
-        min_speed=CHANNEL_CONFIG["doppler_shift"]["min_speed"],
-        max_speed=CHANNEL_CONFIG["doppler_shift"]["max_speed"],
-        carrier_frequency=CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
+        dtype=tf.complex64
     )
 
 def calculate_coherence_time():
