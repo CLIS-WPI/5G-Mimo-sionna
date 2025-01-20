@@ -185,17 +185,13 @@ def generate_dataset(output_file, num_samples):
     # Calculate sampling frequency
     sampling_frequency = RESOURCE_GRID["subcarrier_spacing"] * RESOURCE_GRID["subcarriers"]
     
-    # Create channel model with OFDM parameters and Doppler effects
+    # Create channel model with OFDM parameter
     channel = OFDMChannel(
         channel_model=create_channel_model(num_users),
         resource_grid=resource_grid,
         add_awgn=True,
-        dtype=tf.complex64,
         normalize_channel=True,
-        sampling_frequency=sampling_frequency,
-        # Add Doppler configuration here if needed
-        maximum_doppler_freq=2 * np.pi * CHANNEL_CONFIG["doppler_shift"]["max_speed"] / \
-                            SPEED_OF_LIGHT * CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
+        dtype=tf.complex64
     )
     
     # Update dataset dictionary to include Doppler information
