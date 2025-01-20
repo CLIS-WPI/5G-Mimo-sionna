@@ -41,7 +41,7 @@ from sionna.channel import OFDMChannel, RayleighBlockFading
 from sionna.channel.tr38901 import AntennaArray
 from sionna.mimo import StreamManagement
 from sionna.mimo.precoding import zero_forcing_precoder, normalize_precoding_power
-from utill.utils import db2lin, lin2db
+from utill.utils import calculate_path_loss, snr_to_noise_power, verify_power_levels
 from config import CONFIG, MIMO_CONFIG, RESOURCE_GRID, CHANNEL_CONFIG, SIONNA_CONFIG, OUTPUT_FILES
 from sionna.ofdm import ResourceGrid
 # Ensure output directories exist
