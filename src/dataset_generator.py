@@ -124,13 +124,24 @@ def calculate_max_doppler_freq():
             SPEED_OF_LIGHT)
 
 def create_channel_model(num_users):
-    """Create channel model with proper number of users and Doppler effects"""
+    """Create channel model with proper Doppler configuration"""
+    
+    # Calculate maximum Doppler shift based on speed and carrier frequency
+    max_doppler = 2 * np.pi * CHANNEL_CONFIG["doppler_shift"]["max_speed"] / \
+                 sionna.SPEED_OF_LIGHT * CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
+    
+    min_doppler = 2 * np.pi * CHANNEL_CONFIG["doppler_shift"]["min_speed"] / \
+                 sionna.SPEED_OF_LIGHT * CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
+    
     return RayleighBlockFading(
         num_rx=num_users,
         num_rx_ant=MIMO_CONFIG["rx_antennas"],
         num_tx=1,
         num_tx_ant=MIMO_CONFIG["tx_antennas"],
-        dtype=tf.complex64
+        dtype=tf.complex64,
+        min_speed=CHANNEL_CONFIG["doppler_shift"]["min_speed"],
+        max_speed=CHANNEL_CONFIG["doppler_shift"]["max_speed"],
+        carrier_frequency=CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
     )
 
 def calculate_coherence_time():
@@ -175,23 +186,19 @@ def generate_dataset(output_file, num_samples):
     coherence_time = calculate_coherence_time()
     print(f"Channel coherence time: {coherence_time*1000:.2f} ms")
 
+    # Set number of users
+    num_users = CONFIG.get("num_users", 4)
+
     # Create resource grid
     resource_grid = create_resource_grid()
 
     # Validate Doppler parameters
     validate_doppler_params()
 
-    # Create antenna arrays
-    tx_array, rx_array = create_antenna_array()
-    
-    # Set number of users and create stream management
-    num_users = CONFIG.get("num_users", 4)
+    # Create stream management
     stream_management = create_stream_management(num_users)
-    
-    # Calculate sampling frequency
-    sampling_frequency = RESOURCE_GRID["subcarrier_spacing"] * RESOURCE_GRID["subcarriers"]
-    
-    # Create channel model with OFDM parameter
+
+    # Create channel model with OFDM parameters
     channel = OFDMChannel(
         channel_model=create_channel_model(num_users),
         resource_grid=resource_grid,
