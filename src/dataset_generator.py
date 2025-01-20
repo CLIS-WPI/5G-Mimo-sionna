@@ -117,8 +117,14 @@ def calculate_sinr(desired_signal, interference_signals, noise_power):
     
     return lin2db(sinr), interference_power  # Return both SINR and interference in dB
 
+def calculate_max_doppler_freq():
+    """Calculate maximum Doppler frequency"""
+    return (CHANNEL_CONFIG["doppler_shift"]["max_speed"] * 
+            CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"] / 
+            SPEED_OF_LIGHT)
+
 def create_channel_model(num_users):
-    """Create channel model with proper number of users"""
+    """Create channel model with proper number of users and Doppler effects"""
     return RayleighBlockFading(
         num_rx=num_users,
         num_rx_ant=MIMO_CONFIG["rx_antennas"],
