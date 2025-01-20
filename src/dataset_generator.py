@@ -36,6 +36,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import tensorflow as tf
+from sionna import SPEED_OF_LIGHT
 from sionna.channel import OFDMChannel, RayleighBlockFading
 from sionna.channel.tr38901 import AntennaArray
 from sionna.mimo import StreamManagement
@@ -134,17 +135,50 @@ def create_channel_model(num_users):
 def calculate_coherence_time():
     """Calculate channel coherence time based on Doppler parameters"""
     max_doppler = 2 * np.pi * CHANNEL_CONFIG["doppler_shift"]["max_speed"] / \
-                 sionna.SPEED_OF_LIGHT * CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
+                 SPEED_OF_LIGHT * CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
     return 1 / max_doppler
 
-# Use this in generate_dataset when generating channel realizations:
-coherence_time = calculate_coherence_time()
+
+def create_resource_grid():
+    """Create resource grid with proper configuration"""
+    return ResourceGrid(
+        num_ofdm_symbols=RESOURCE_GRID["ofdm_symbols"],
+        fft_size=RESOURCE_GRID["subcarriers"],
+        subcarrier_spacing=RESOURCE_GRID["subcarrier_spacing"],
+        num_guard_carriers=RESOURCE_GRID["num_guard_carriers"],
+        dc_null=RESOURCE_GRID["dc_null"],
+        num_tx=1,
+        num_streams_per_tx=1,
+        cyclic_prefix_length=0,
+        pilot_pattern="empty"
+    )
+
+def validate_doppler_params():
+    """Validate Doppler shift parameters"""
+    try:
+        doppler_params = CHANNEL_CONFIG["doppler_shift"]
+        assert doppler_params["min_speed"] > 0, "Minimum speed must be positive"
+        assert doppler_params["max_speed"] > doppler_params["min_speed"], \
+            "Maximum speed must be greater than minimum speed"
+        assert doppler_params["carrier_frequency"] > 0, "Carrier frequency must be positive"
+    except AssertionError as e:
+        raise ValueError(f"Invalid Doppler parameters: {str(e)}")
+    except KeyError as e:
+        raise KeyError(f"Missing Doppler parameter: {str(e)}")
 
 def generate_dataset(output_file, num_samples):
     """Generate dataset with improved SINR calculation and multi-user support"""
     print(f"Generating dataset: {output_file} with {num_samples} samples...")
+    
+    # Calculate and print coherence time at the start
+    coherence_time = calculate_coherence_time()
+    print(f"Channel coherence time: {coherence_time*1000:.2f} ms")
+
     # Create resource grid
     resource_grid = create_resource_grid()
+
+    # Validate Doppler parameters
+    validate_doppler_params()
 
     # Create antenna arrays
     tx_array, rx_array = create_antenna_array()
@@ -153,6 +187,9 @@ def generate_dataset(output_file, num_samples):
     num_users = CONFIG.get("num_users", 4)
     stream_management = create_stream_management(num_users)
     
+    # Calculate sampling frequency
+    sampling_frequency = RESOURCE_GRID["subcarrier_spacing"] * RESOURCE_GRID["subcarriers"]
+    
     # Create channel model with OFDM parameters and Doppler effects
     channel = OFDMChannel(
         channel_model=create_channel_model(num_users),
@@ -160,8 +197,7 @@ def generate_dataset(output_file, num_samples):
         add_awgn=True,
         dtype=tf.complex64,
         normalize_channel=True,
-        # Add sampling time based on OFDM parameters
-        sampling_frequency=RESOURCE_GRID["subcarrier_spacing"] * RESOURCE_GRID["subcarriers"]
+        sampling_frequency=sampling_frequency  # Add calculated sampling frequency
     )
     
     # Update dataset dictionary to include Doppler information
@@ -179,8 +215,7 @@ def generate_dataset(output_file, num_samples):
         }
     }
     
-    # ... (rest of the existing code) ...
-    
+
     # Calculate noise power from noise floor
     noise_power = db2lin(CONFIG["noise_floor"])
     
@@ -201,7 +236,7 @@ def generate_dataset(output_file, num_samples):
         # Generate channel realizations
         channels = channel(
             batch_size=batch_size,
-            num_time_steps=1
+            num_time_steps=RESOURCE_GRID["ofdm_symbols"]
         )
         if isinstance(channels, tuple):
             channels, _ = channels
@@ -275,16 +310,41 @@ def generate_dataset(output_file, num_samples):
     # Save dataset
     np.save(output_file, dataset)
     print(f"\nDataset saved to {output_file}")
-    print(f"Dataset statistics:")
-    print(f"Channel realizations shape: {dataset['channel_realizations'].shape}")
-    print(f"SNR shape: {dataset['snr'].shape}")
-    print(f"SINR shape: {dataset['sinr'].shape}")
-    print(f"Interference shape: {dataset['interference'].shape}")
-    print(f"User association shape: {dataset['user_association'].shape}")
-    print(f"Precoding matrices shape: {dataset['precoding_matrices'].shape}")
+    print(f"\nDataset Statistics:")
+    print("=" * 50)
     
-    # Verify interference range
+    # Print shapes and basic statistics
+    print("\nShape Information:")
+    print(f"Channel realizations: {dataset['channel_realizations'].shape}")
+    print(f"SNR values: {dataset['snr'].shape}")
+    print(f"SINR values: {dataset['sinr'].shape}")
+    print(f"Interference values: {dataset['interference'].shape}")
+    print(f"User association: {dataset['user_association'].shape}")
+    print(f"Precoding matrices: {dataset['precoding_matrices'].shape}")
+    
+    print("\nValue Ranges:")
+    print(f"SNR range: [{np.min(dataset['snr']):.2f}, {np.max(dataset['snr']):.2f}] dB")
+    print(f"SINR range: [{np.min(dataset['sinr']):.2f}, {np.max(dataset['sinr']):.2f}] dB")
     print(f"Interference range: [{np.min(dataset['interference']):.2f}, {np.max(dataset['interference']):.2f}] dB")
+    
+    print("\nDoppler Information:")
+    print(f"Carrier Frequency: {dataset['doppler_info']['carrier_frequency']/1e9:.2f} GHz")
+    print(f"Speed Range: [{dataset['doppler_info']['min_speed']:.1f}, "
+        f"{dataset['doppler_info']['max_speed']:.1f}] m/s")
+    print(f"Coherence Time: {calculate_coherence_time()*1000:.2f} ms")
+    
+    # Verify data integrity
+    print("\nData Integrity Checks:")
+    print(f"Number of samples: {len(dataset['channel_realizations'])}")
+    print(f"Memory usage: {sum([x.nbytes for x in dataset.values() if isinstance(x, np.ndarray)])/1e6:.2f} MB")
+    
+    # Check for NaN or Inf values
+    has_nan = any(np.isnan(x).any() for x in dataset.values() if isinstance(x, np.ndarray))
+    has_inf = any(np.isinf(x).any() for x in dataset.values() if isinstance(x, np.ndarray))
+    print(f"Contains NaN values: {'Yes' if has_nan else 'No'}")
+    print(f"Contains Inf values: {'Yes' if has_inf else 'No'}")
+    
+    print("\n" + "=" * 50)
     
     return dataset
 
