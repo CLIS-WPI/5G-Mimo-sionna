@@ -33,8 +33,14 @@
 #############################
 import os
 import sys
-from utill import gpu
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utill.gpu import setup_gpu, get_gpu_memory_info
+gpu_available = setup_gpu()
+if gpu_available:
+    print("GPU is configured and ready for use")
+    print(get_gpu_memory_info())
+else:
+    print("Running on CPU mode")
 import numpy as np
 import tensorflow as tf
 from sionna import SPEED_OF_LIGHT
@@ -45,6 +51,7 @@ from sionna.mimo.precoding import zero_forcing_precoder, normalize_precoding_pow
 from utill.utils import db2lin, lin2db
 from config import CONFIG, MIMO_CONFIG, RESOURCE_GRID, CHANNEL_CONFIG, SIONNA_CONFIG, OUTPUT_FILES
 from sionna.ofdm import ResourceGrid
+
 # Ensure output directories exist
 os.makedirs(os.path.dirname(OUTPUT_FILES["training_data"]), exist_ok=True)
 os.makedirs(os.path.dirname(OUTPUT_FILES["validation_data"]), exist_ok=True)
