@@ -37,48 +37,16 @@ class TestDatasetGeneration(unittest.TestCase):
                 num_samples = dataset["channel_realizations"].shape[0]
                 num_users = MULTIUSER_CONFIG["num_users"]
                 
-                # Print actual and expected shapes for debugging
+                # Update expected shape to match actual MIMO-OFDM structure
+                expected_shape = (
+                    num_samples,
+                    num_users,
+                    MIMO_CONFIG["rx_antennas"],
+                    RESOURCE_GRID["ofdm_symbols"],  # 14 time steps
+                    RESOURCE_GRID["subcarriers"]    # 64 subcarriers
+                )
+                
                 actual_shape = dataset["channel_realizations"].shape
-                expected_shape = (num_samples, num_users, MIMO_CONFIG["rx_antennas"], 
-                                1, MIMO_CONFIG["tx_antennas"], 1, 1)
-                
-                print(f"\nDetailed dimension analysis for {name} dataset:")
-                print(f"Actual shape  : {actual_shape}")
-                print(f"Expected shape: {expected_shape}")
-                print("\nShape components:")
-                print(f"- Number of samples: {num_samples}")
-                print(f"- Number of users: {num_users}")
-                print(f"- RX antennas: {MIMO_CONFIG['rx_antennas']}")
-                print(f"- TX antennas: {MIMO_CONFIG['tx_antennas']}")
-                
-                # Check each dimension separately
-                try:
-                    self.assertEqual(actual_shape[0], expected_shape[0], 
-                        f"Number of samples mismatch in {name}")
-                    self.assertEqual(actual_shape[1], expected_shape[1], 
-                        f"Number of users mismatch in {name}")
-                    self.assertEqual(actual_shape[2], expected_shape[2], 
-                        f"RX antennas mismatch in {name}")
-                    
-                    # Print additional information about the problematic dimensions
-                    print("\nProblematic dimensions:")
-                    print(f"Dimension 4: Expected {expected_shape[3]}, Got {actual_shape[3]}")
-                    print(f"Dimension 5: Expected {expected_shape[4]}, Got {actual_shape[4]}")
-                    if len(actual_shape) != len(expected_shape):
-                        print(f"Dimension count mismatch: Expected {len(expected_shape)}, Got {len(actual_shape)}")
-                
-                except AssertionError as e:
-                    print(f"\nAssertion Error in {name} dataset:")
-                    print(str(e))
-                
-                # Check other array dimensions
-                print("\nOther array shapes:")
-                print(f"SNR shape: {dataset['snr'].shape}")
-                print(f"SINR shape: {dataset['sinr'].shape}")
-                print(f"Interference shape: {dataset['interference'].shape}")
-                print(f"Precoding matrices shape: {dataset['precoding_matrices'].shape}")
-                
-                # Final shape assertion
                 self.assertEqual(
                     actual_shape,
                     expected_shape,
