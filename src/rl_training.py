@@ -154,9 +154,6 @@ def train_sac(training_data, validation_data, config):
 
     print("Training complete.")
 
-
-
-
 # Validation function
 def validate_model(sac, validation_data):
     val_channels, val_snr = validation_data

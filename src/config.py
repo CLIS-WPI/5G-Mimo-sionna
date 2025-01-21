@@ -32,20 +32,18 @@
 # This configuration allows for consistent dataset generation for training, validation, and testing
 # in reinforcement learning and other machine learning-based beamforming optimization tasks.
 #####################################################################################################################
-
-#####################################################################################################################
 import os
 # General Configuration
 CONFIG = {
     "random_seed": 42,  # Seed for reproducibility
     "output_dir": "./data/",  # Directory to store generated datasets
-    "dataset_size": 1320000,        # Reduced from 1320000
-    "validation_size": 100000,      # Reduced from 100000
-    "test_size": 100000,           # Reduced from 100000
+    "dataset_size": 1320000,        
+    "validation_size": 100000,      
+    "test_size": 100000,           
     "noise_floor": -174,  # Noise floor in dBm/Hz
     "number_of_episodes": 100,  # Number of training episodes
     "mini_batch_size": 256,  # Mini-batch size for training
-    "batch_size": 256,            # Reduced from 256
+    "batch_size": 256,   
     "actor_lr": 1e-4,  # Learning rate for the actor network
     "critic_lr": 1e-3,  # Learning rate for the critic network
     "alpha_lr": 1e-4,  # Learning rate for the alpha parameter
@@ -87,7 +85,6 @@ RESOURCE_GRID = {
     "dc_null": True  # Null the DC subcarrier
 }
 
-
 # Channel Model Configuration
 CHANNEL_CONFIG = {
     "type": "rayleigh",  # Rayleigh block fading model
@@ -95,7 +92,7 @@ CHANNEL_CONFIG = {
     "coherence_time": 1,  # Coherence time in slots
     "user_type": "static",  # Static user positions
     "path_loss_model": "FSPL",  # Free space path loss model
-    "snr_range": (10, 30),  # Change from (0,30) to (10,30) for better SNR
+    "snr_range": (10, 30),  
     "delay_spread": (0.1e-6, 0.5e-6),  # Reduce max delay spread
     "doppler_shift": {
         "min_speed": 0.1,  # m/s (minimum speed to avoid purely static scenario)
@@ -108,8 +105,8 @@ CHANNEL_CONFIG = {
         "enabled": True,
         "model_type": "multi_user",
         "num_interferers": 2,        # Reduced from 3 to 2 interferers
-        "interference_power_range": (-100, -80),  # Changed from (-120, -60) to (-100, -80)
-        "spatial_correlation": 0.3,  # Reduced from 0.5 to 0.3
+        "interference_power_range": (-100, -80),  
+        "spatial_correlation": 0.3,  
     },
     "sinr_calculation": {
         "enabled": True,
@@ -136,10 +133,6 @@ SIONNA_CONFIG = {
     "interference_modeling": True,  # Enable interference modeling
     "precoding_enabled": True,  # Enable precoding
 }
-
-# Output Configuration
-# At the beginning of the script, add:
-
 
 # OUTPUT_FILES paths 
 OUTPUT_FILES = {

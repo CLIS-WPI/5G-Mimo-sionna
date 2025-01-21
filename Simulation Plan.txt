@@ -26,12 +26,16 @@
 % Coherence Time: 1 slot (Block fading assumption)
 % User: Static (RX devices like modem or fixed stations.)
 % Path Loss Models: FSPL (Implement Free Space Path Loss - FSPL)
-% SNR Range: 0 to 30 dB (Testing range)
-% Delay Spread: 0.1-1 μs (Simulate realistic channel time dispersion.)
+% SNR Range: 10 to 30 dB (SNR range)
+% SINR Target: 20 dB
+% SINR Weight: 0.3
+% SINR Threshold: 10.0 dB
+% Interference Threshold: -90 dBm
+% Delay Spread: 0.1e-6, 0.5e-6 (Simulate realistic channel time dispersion.)
 % Doppler Shift: 0 Hz (Doppler shift set to 0 Hz, no mobility/time-variation in channel modeling.)
 % Spatial Consistency: Static (no variations) (Keep channel static for predictable performance evaluation.)
 % Channel Model Configuration: 1.5m (Fixed antenna heights - 1.5m)
-% Interference Sources: None (Avoid interference for initial dataset.)
+% Interference Sources: -100, -80
 
 % Training Parameters
 % Model: Soft Actor-Critic (SAC) (Actor Network - Policy Network | Critic Network - Twin Q-networks)
