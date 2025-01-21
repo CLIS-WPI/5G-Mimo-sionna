@@ -39,13 +39,13 @@ import os
 CONFIG = {
     "random_seed": 42,  # Seed for reproducibility
     "output_dir": "./data/",  # Directory to store generated datasets
-    "dataset_size": 10000,        # Reduced from 1320000
-    "validation_size": 1000,      # Reduced from 100000
-    "test_size": 1000,           # Reduced from 100000
+    "dataset_size": 1320000,        # Reduced from 1320000
+    "validation_size": 100000,      # Reduced from 100000
+    "test_size": 100000,           # Reduced from 100000
     "noise_floor": -174,  # Noise floor in dBm/Hz
-    "number_of_episodes": 1,  # Number of training episodes
+    "number_of_episodes": 100,  # Number of training episodes
     "mini_batch_size": 256,  # Mini-batch size for training
-    "batch_size": 32,            # Reduced from 256
+    "batch_size": 256,            # Reduced from 256
     "actor_lr": 1e-4,  # Learning rate for the actor network
     "critic_lr": 1e-3,  # Learning rate for the critic network
     "alpha_lr": 1e-4,  # Learning rate for the alpha parameter
@@ -129,9 +129,9 @@ MULTIUSER_CONFIG = {
 
 # Sionna Simulation Settings
 SIONNA_CONFIG = {
-    "batch_size": 32,
+    "batch_size": 256,
     "num_realizations": CONFIG["dataset_size"],
-    "num_workers": 4,
+    "num_workers": 8,
     "stream_management": True,  # Enable stream management in Sionna
     "interference_modeling": True,  # Enable interference modeling
     "precoding_enabled": True,  # Enable precoding
