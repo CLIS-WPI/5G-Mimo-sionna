@@ -307,7 +307,8 @@ def generate_dataset(output_file, num_samples):
     
     # Concatenate all batches
     for key in dataset:
-        dataset[key] = np.concatenate(dataset[key], axis=0) if len(dataset[key]) > 0 else np.array([])
+        if key != "doppler_info":  # Skip doppler_info dictionary
+            dataset[key] = np.concatenate(dataset[key], axis=0) if len(dataset[key]) > 0 else np.array([])
     
     # Save dataset
     np.save(output_file, dataset)

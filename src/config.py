@@ -39,13 +39,13 @@ import os
 CONFIG = {
     "random_seed": 42,  # Seed for reproducibility
     "output_dir": "./data/",  # Directory to store generated datasets
-    "dataset_size": 1320000,  # Total number of samples to generate
-    "validation_size": 100000,  # Number of validation samples
-    "test_size": 100000,  # Number of test samples
+    "dataset_size": 10000,        # Reduced from 1320000
+    "validation_size": 1000,      # Reduced from 100000
+    "test_size": 1000,           # Reduced from 100000
     "noise_floor": -174,  # Noise floor in dBm/Hz
     "number_of_episodes": 1,  # Number of training episodes
     "mini_batch_size": 256,  # Mini-batch size for training
-    "batch_size": 256,  # Add this line - Same as SIONNA_CONFIG batch_size
+    "batch_size": 32,            # Reduced from 256
     "actor_lr": 1e-4,  # Learning rate for the actor network
     "critic_lr": 1e-3,  # Learning rate for the critic network
     "alpha_lr": 1e-4,  # Learning rate for the alpha parameter
@@ -129,7 +129,7 @@ MULTIUSER_CONFIG = {
 
 # Sionna Simulation Settings
 SIONNA_CONFIG = {
-    "batch_size": 50,
+    "batch_size": 32,
     "num_realizations": CONFIG["dataset_size"],
     "num_workers": 4,
     "stream_management": True,  # Enable stream management in Sionna
