@@ -1,22 +1,46 @@
 # src/rl_training.py
 # This script implements the training of a Soft Actor-Critic (SAC) model for optimizing beamforming in MIMO systems 
-# based on simulated channel realizations. The model aims to dynamically adjust the transmit beamforming vector 
-# to improve system performance based on varying Signal-to-Noise Ratios (SNR) and channel conditions. 
+# based on simulated channel realizations. The model aims to dynamically adjust the transmit beamforming vectors 
+# to maximize system performance by considering Signal-to-Interference-plus-Noise Ratio (SINR), Signal-to-Noise 
+# Ratio (SNR), and interference levels.
+
+# Key Objectives:
+# - Optimize beamforming vectors to achieve target SINR levels (20 dB target)
+# - Minimize interference between multiple receivers
+# - Maintain acceptable SNR levels while managing the SINR-interference trade-off
 
 # Inputs:
 # - Training and validation datasets, which include channel realizations and corresponding SNR values.
 #   The datasets are loaded from pre-generated .npy files containing the data produced by the dataset generator script.
 #   The data consists of:
-#   - channel_realizations: A tensor representing the generated channel realizations (e.g., Rayleigh fading).
-#   - snr: A vector of corresponding Signal-to-Noise Ratio (SNR) values used as rewards for training.
+#   - channel_realizations: A tensor representing the complex channel matrices for MIMO systems
+#   - snr: Initial SNR values used as part of the reward computation
 #
 # Outputs:
 # - The SAC model's parameters are updated after each episode through gradient-based optimization.
-# - The actor and critic networks (and their weights) are refined iteratively to improve the beamforming policy.
-# - Training progress and validation rewards are printed during training to monitor the model's performance.
+# - The actor and critic networks are refined iteratively to improve the beamforming policy.
+# - Training progress and validation rewards are printed during training to monitor performance.
+# - The model learns to balance:
+#   * SINR improvement towards the 20 dB target (60% weight)
+#   * SNR maintenance (30% weight)
+#   * Interference reduction (10% weight)
 #
-# The model uses a policy-based approach to maximize long-term rewards by improving the beamforming decisions,
-# leveraging a reinforcement learning paradigm, with the reward being the SNR for simplicity in this case.
+# The model uses a sophisticated reward mechanism that considers:
+# - SINR target achievement (20 dB)
+# - Minimum SINR threshold (10 dB)
+# - Interference levels between receivers
+# - Overall SNR performance
+#
+# The training process employs the SAC algorithm with:
+# - Double Q-learning for robust critic estimation
+# - Entropy regularization for exploration
+# - Adaptive alpha parameter for temperature adjustment
+# - Batch processing for efficient training
+#
+# Performance Monitoring:
+# - Regular validation checks to assess model improvement
+# - Tracking of episode rewards, critic losses, and actor losses
+# - Early detection of NaN values and training instabilities
 
 import os
 import numpy as np
