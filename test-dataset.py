@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from src.config import CONFIG, MIMO_CONFIG, CHANNEL_CONFIG, MULTIUSER_CONFIG
+from src.config import CONFIG, MIMO_CONFIG, CHANNEL_CONFIG, MULTIUSER_CONFIG, RESOURCE_GRID
 
 class TestDatasetGeneration(unittest.TestCase):
     """Test suite for dataset generation validation"""
@@ -37,20 +37,53 @@ class TestDatasetGeneration(unittest.TestCase):
                 num_samples = dataset["channel_realizations"].shape[0]
                 num_users = MULTIUSER_CONFIG["num_users"]
                 
-                # Update expected shape to match actual MIMO-OFDM structure
-                expected_shape = (
+                # Print detailed information for debugging
+                print(f"\nDetailed dimension analysis for {name} dataset:")
+                print(f"Actual shape: {dataset['channel_realizations'].shape}")
+                
+                # Expected shapes for each array
+                channel_shape = (
                     num_samples,
                     num_users,
                     MIMO_CONFIG["rx_antennas"],
-                    RESOURCE_GRID["ofdm_symbols"],  # 14 time steps
-                    RESOURCE_GRID["subcarriers"]    # 64 subcarriers
+                    RESOURCE_GRID["ofdm_symbols"],
+                    RESOURCE_GRID["subcarriers"]
                 )
                 
-                actual_shape = dataset["channel_realizations"].shape
+                snr_shape = (num_samples,)
+                sinr_shape = (num_samples, num_users)
+                interference_shape = (num_samples, num_users)
+                precoding_shape = (num_samples, num_users, MIMO_CONFIG["rx_antennas"])
+                
+                # Test each array's shape
                 self.assertEqual(
-                    actual_shape,
-                    expected_shape,
+                    dataset["channel_realizations"].shape,
+                    channel_shape,
                     f"Invalid channel_realizations shape in {name}"
+                )
+                
+                self.assertEqual(
+                    dataset["snr"].shape,
+                    snr_shape,
+                    f"Invalid SNR shape in {name}"
+                )
+                
+                self.assertEqual(
+                    dataset["sinr"].shape,
+                    sinr_shape,
+                    f"Invalid SINR shape in {name}"
+                )
+                
+                self.assertEqual(
+                    dataset["interference"].shape,
+                    interference_shape,
+                    f"Invalid interference shape in {name}"
+                )
+                
+                self.assertEqual(
+                    dataset["precoding_matrices"].shape,
+                    precoding_shape,
+                    f"Invalid precoding matrices shape in {name}"
                 )
 
     def test_value_ranges(self):
