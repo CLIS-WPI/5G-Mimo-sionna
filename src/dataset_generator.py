@@ -33,6 +33,7 @@
 #############################
 import os
 import sys
+from utill import gpu
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 import tensorflow as tf
