@@ -70,11 +70,88 @@ class SoftActorCritic:
         return action.numpy().flatten()
 
 
+def compute_reward(snr, sinr, interference_level):
+    """
+    Compute reward based on SINR target and interference
+    Args:
+        snr: Signal-to-Noise Ratio
+        sinr: Signal-to-Interference-plus-Noise Ratio
+        interference_level: Level of interference
+    """
+    sinr_target = 20.0  # Our target SINR of 20 dB
+    sinr_threshold = 10.0  # Minimum acceptable SINR
+
+    # Penalize if SINR is below threshold
+    if sinr < sinr_threshold:
+        return -10.0
+    
+    reward = (
+        0.6 * (sinr - sinr_target) +  # SINR improvement towards target
+        0.3 * snr +  # SNR contribution
+        0.1 * (-interference_level)  # Interference reduction
+    )
+    return reward
+
 # Training function
+
+def compute_interference(channel_state, beamforming_vectors):
+    """
+    Compute interference levels for MIMO transmissions
+    Args:
+        channel_state: Complex channel matrix [batch_size, num_rx, num_tx]
+        beamforming_vectors: Beamforming vectors [batch_size, num_tx]
+    Returns:
+        interference_levels: Interference power levels [batch_size]
+    """
+    # Convert to complex tensors
+    h = tf.cast(channel_state, tf.complex64)
+    w = tf.cast(beamforming_vectors, tf.complex64)
+    
+    # Compute interference power
+    interference = tf.zeros(tf.shape(h)[0], dtype=tf.float32)
+    for i in range(tf.shape(h)[1]):  # For each receiver
+        desired_signal = tf.abs(tf.matmul(h[:, i:i+1, :], tf.expand_dims(w, -1)))**2
+        total_power = tf.reduce_sum(desired_signal, axis=1)
+        interference += total_power - desired_signal[:, 0]  # Subtract desired signal power
+    
+    return interference
+
+def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
+    """
+    Compute SINR for MIMO transmissions
+    Args:
+        channel_state: Complex channel matrix [batch_size, num_rx, num_tx]
+        beamforming_vectors: Beamforming vectors [batch_size, num_tx]
+        noise_power: Noise power (default: 1.0)
+    Returns:
+        sinr_values: SINR values [batch_size]
+    """
+    # Convert to complex tensors
+    h = tf.cast(channel_state, tf.complex64)
+    w = tf.cast(beamforming_vectors, tf.complex64)
+    
+    # Compute desired signal power
+    desired_signal = tf.abs(tf.matmul(h, tf.expand_dims(w, -1)))**2
+    signal_power = tf.reduce_sum(desired_signal, axis=1)
+    
+    # Compute interference
+    interference = compute_interference(channel_state, beamforming_vectors)
+    
+    # Compute SINR
+    sinr = 10.0 * tf.math.log(signal_power / (interference + noise_power)) / tf.math.log(10.0)
+    
+    return sinr
+
+
 def train_sac(training_data, validation_data, config):
     input_shape = training_data[0].shape[1:]  # Exclude batch size
     num_actions = MIMO_CONFIG["tx_antennas"]  # Beamforming actions correspond to TX antennas
-
+    # Add at the start of train_sac
+    training_history = {
+        'episode_rewards': [],
+        'critic_losses': [],
+        'actor_losses': []
+    }
     # Instantiate the SAC model
     sac = SoftActorCritic(
         input_shape=input_shape,
@@ -95,12 +172,11 @@ def train_sac(training_data, validation_data, config):
             end = start + config["batch_size"]
             batch_channels = training_data[0][start:end]
             batch_snr = training_data[1][start:end]
-
+            
             # Convert complex values to real parts (remove imaginary part)
             batch_channels = tf.math.real(batch_channels)
 
-            # Simulate actions and compute rewards (dummy example for now)
-            # Ensure actions are generated for the correct batch size
+            # Simulate actions and compute rewards
             actions = np.array([sac.get_action(state) for state in batch_channels])
 
             # Ensure actions have the correct shape (batch_size, num_actions)
@@ -110,7 +186,17 @@ def train_sac(training_data, validation_data, config):
             if batch_channels.shape[0] != actions.shape[0]:
                 raise ValueError(f"Batch size mismatch: batch_channels size {batch_channels.shape[0]}, actions size {actions.shape[0]}")
 
-            rewards = batch_snr  # Assume SNR as reward for simplicity
+            # Inside train_sac function, replace:
+            rewards = batch_snr  # Using SNR as reward
+
+            # With:
+            # Compute SINR and interference
+            sinr_values = compute_sinr(batch_channels, actions)
+            interference_levels = compute_interference(batch_channels, actions)
+
+            # Calculate rewards using the reward function
+            rewards = np.array([compute_reward(snr, sinr, interference) 
+                            for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)])
 
             # Compute critic losses and actor updates
             with tf.GradientTape(persistent=True) as tape:
@@ -166,7 +252,16 @@ def validate_model(sac, validation_data):
 
         # Simulate actions and compute rewards
         actions = np.array([sac.get_action(state) for state in batch_channels])
-        total_reward += np.sum(batch_snr)  # Sum rewards (for validation)
+        
+        # Compute SINR and interference for validation
+        sinr_values = compute_sinr(batch_channels, actions)
+        interference_levels = compute_interference(batch_channels, actions)
+        
+        # Calculate rewards using the same reward function
+        rewards = np.array([compute_reward(snr, sinr, interference) 
+                        for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)])
+        
+        total_reward += np.sum(rewards)
 
     print(f"Validation reward: {total_reward / len(validation_data[0])}")
 
