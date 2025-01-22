@@ -4,12 +4,12 @@ scipy>=1.7.0
 pandas>=1.3.0
 
 # Deep Learning Framework
-tensorflow>=2.6.0
+tensorflow>=2.14.0
 tensorflow-probability>=0.14.0
 
 # RF and Communications
 sionna>=0.19.1  # Sionna for RF simulation
-commpy>=0.6.0   # Communications library
+#commpy>=0.6.0   # Communications library
 
 # Machine Learning & RL
 gym>=0.21.0
