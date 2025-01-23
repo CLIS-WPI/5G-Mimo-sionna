@@ -127,7 +127,7 @@ MULTIUSER_CONFIG = {
 
 # Sionna Simulation Settings
 SIONNA_CONFIG = {
-    "batch_size": 512,
+    "batch_size": 440,
     "num_realizations": CONFIG["dataset_size"],
     "num_workers": 8,
     "stream_management": True,  # Enable stream management in Sionna

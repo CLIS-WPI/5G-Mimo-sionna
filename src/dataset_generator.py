@@ -97,38 +97,38 @@ def merge_chunks(temp_files, output_file, doppler_info):
         "doppler_info": doppler_info
     }
     
-    # First verify all files exist
-    existing_files = []
-    for temp_file in temp_files:
-        if os.path.exists(temp_file):
-            existing_files.append(temp_file)
-        else:
-            print(f"Warning: Chunk file {temp_file} not found")
-    
-    if not existing_files:
-        print("Error: No valid chunk files found to merge")
-        return merged_data
-        
     # Process existing files
-    for temp_file in existing_files:
+    for temp_file in temp_files:
+        if not os.path.exists(temp_file):
+            print(f"Warning: Chunk file {temp_file} not found")
+            continue
+            
         try:
-            with np.load(temp_file, allow_pickle=True) as chunk:
-                for key in merged_data:
-                    if key != "doppler_info" and key in chunk:
-                        merged_data[key].append(chunk[key])
+            # Load NPY file without context manager
+            if temp_file.endswith('.npy'):
+                chunk = np.load(temp_file, allow_pickle=True).item()
+            else:  # NPZ file
+                chunk = np.load(temp_file, allow_pickle=True)
+                
+            for key in merged_data:
+                if key != "doppler_info" and key in chunk:
+                    merged_data[key].append(chunk[key])
+                    
+            # Clean up after successful processing
             try:
                 os.remove(temp_file)
                 print(f"Cleaned up temporary file: {temp_file}")
             except OSError as e:
                 print(f"Warning: Could not delete temporary file {temp_file}: {e}")
+                
         except Exception as e:
             print(f"Error processing chunk file {temp_file}: {str(e)}")
             continue
-    
-    # Only concatenate if we have data to merge
+
+    # Merge the data if we have any
     if any(len(merged_data[key]) > 0 for key in merged_data if key != "doppler_info"):
         for key in merged_data:
-            if key != "doppler_info":
+            if key != "doppler_info" and merged_data[key]:
                 try:
                     merged_data[key] = np.concatenate(merged_data[key], axis=0)
                 except Exception as e:
