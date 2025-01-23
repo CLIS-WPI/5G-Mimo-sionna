@@ -88,19 +88,42 @@ def merge_chunks(temp_files, output_file, doppler_info):
     }
     
     for temp_file in temp_files:
-        with np.load(temp_file, allow_pickle=True) as chunk:
-            # Process each array in the npz file
-            for key in merged_data:
-                if key != "doppler_info" and key in chunk:
-                    merged_data[key].append(chunk[key])
-        os.remove(temp_file)  # Clean up temp file
+        try:
+            if os.path.exists(temp_file):
+                with np.load(temp_file, allow_pickle=True) as chunk:
+                    # Process each array in the npz file
+                    for key in merged_data:
+                        if key != "doppler_info" and key in chunk:
+                            merged_data[key].append(chunk[key])
+                try:
+                    os.remove(temp_file)  # Clean up temp file
+                except OSError:
+                    print(f"Warning: Could not delete temporary file {temp_file}")
+            else:
+                print(f"Warning: Chunk file {temp_file} not found")
+        except Exception as e:
+            print(f"Error processing chunk file {temp_file}: {str(e)}")
+            continue
     
-    # Concatenate all chunks
-    for key in merged_data:
-        if key != "doppler_info":
-            merged_data[key] = np.concatenate(merged_data[key], axis=0)
+    # Only concatenate if we have data to merge
+    if any(len(merged_data[key]) > 0 for key in merged_data if key != "doppler_info"):
+        # Concatenate all chunks
+        for key in merged_data:
+            if key != "doppler_info":
+                try:
+                    merged_data[key] = np.concatenate(merged_data[key], axis=0)
+                except Exception as e:
+                    print(f"Error concatenating {key}: {str(e)}")
+        
+        # Save merged data
+        try:
+            np.save(output_file, merged_data)
+            print(f"Successfully saved merged data to {output_file}")
+        except Exception as e:
+            print(f"Error saving merged data: {str(e)}")
+    else:
+        print("Warning: No data to merge")
     
-    np.save(output_file, merged_data)
     return merged_data
 
 #############################################
@@ -291,27 +314,28 @@ def generate_dataset(output_file, num_samples):
     for batch in range(num_samples // SIONNA_CONFIG["batch_size"]):
         batch_size = SIONNA_CONFIG["batch_size"]
         
-        # Process batch and create chunk_data
-        # ... (your existing batch processing code) ...
-        
         # Save chunk to temporary file if we have data
         if chunk_data is not None:
+    
+            # Save chunks less frequently
             if (batch + 1) % chunk_save_frequency == 0:
-                temp_file = save_chunk_to_file(chunk_data, output_file, len(temp_files))
+                temp_file = save_chunk_to_file(chunk_data, output_file, batch)  # Use batch number instead of len(temp_files)
                 if os.path.exists(temp_file):  # Verify file was created
                     temp_files.append(temp_file)
-                    print(f"Saved chunk {len(temp_files)}")
+                    print(f"Saved chunk {batch}")
                 else:
-                    print(f"Warning: Failed to save chunk {len(temp_files)}")
-            
-            # Merge chunks when threshold is reached
+                    print(f"Warning: Failed to save chunk {batch}")
+                    
+            # Merge chunks periodically
             if len(temp_files) >= merge_threshold:
                 print("\nIntermediate merging of chunks...")
+                # Verify all files exist before merging
                 existing_files = [f for f in temp_files if os.path.exists(f)]
                 if existing_files:
                     intermediate_output = f"{output_file}_intermediate.npy"
                     merge_chunks(existing_files, intermediate_output, dataset["doppler_info"])
                     temp_files = [intermediate_output]
+                    print(f"Merged {len(existing_files)} chunks")
                 else:
                     print("Warning: No valid files to merge")
         
