@@ -128,7 +128,7 @@ def merge_chunks(temp_files, output_file, doppler_info):
                 os.remove(temp_file)
                 print(f"Cleaned up temporary file: {temp_file}")
             except OSError as e:
-                print(f"Warning: Could not delete temporary file {temp_file}: {e}")
+                print(f"Warning: Coul   d not delete temporary file {temp_file}: {e}")
                 
         except Exception as e:
             print(f"Error processing chunk file {temp_file}: {str(e)}")
