@@ -69,8 +69,10 @@ def monitor_memory():
 #function to save less frequently:
 def save_chunk_to_file(chunk_data, output_file, chunk_idx):
     """Save a chunk of data to a temporary file with compression"""
-    temp_file = f"{output_file}_chunk_{chunk_idx}.npz"  # Use .npz instead of .npy
-    np.savez_compressed(temp_file, **chunk_data)  # Use compressed format
+    temp_file = f"{output_file}_chunk_{chunk_idx}.npz"
+    # Save each key separately in the compressed file
+    save_dict = {key: chunk_data[key] for key in chunk_data if key != "doppler_info"}
+    np.savez_compressed(temp_file, **save_dict)
     return temp_file
 
 def merge_chunks(temp_files, output_file, doppler_info):
@@ -86,10 +88,11 @@ def merge_chunks(temp_files, output_file, doppler_info):
     }
     
     for temp_file in temp_files:
-        chunk = np.load(temp_file, allow_pickle=True).item()
-        for key in merged_data:
-            if key != "doppler_info":
-                merged_data[key].append(chunk[key])
+        with np.load(temp_file, allow_pickle=True) as chunk:
+            # Process each array in the npz file
+            for key in merged_data:
+                if key != "doppler_info" and key in chunk:
+                    merged_data[key].append(chunk[key])
         os.remove(temp_file)  # Clean up temp file
     
     # Concatenate all chunks
@@ -223,8 +226,9 @@ def validate_doppler_params():
 def generate_dataset(output_file, num_samples):
     print(f"Generating dataset: {output_file} with {num_samples} samples...")
     
-    # Increase batch size for better memory management
+    # Initialize variables for chunk management
     temp_files = []
+    chunk_data = None  # Initialize chunk_data
     chunk_save_frequency = 5  # Save every 5 batches
     merge_threshold = 10      # Merge after 10 chunks
     
@@ -287,17 +291,29 @@ def generate_dataset(output_file, num_samples):
     for batch in range(num_samples // SIONNA_CONFIG["batch_size"]):
         batch_size = SIONNA_CONFIG["batch_size"]
         
-        # Save chunks less frequently
-        if (batch + 1) % chunk_save_frequency == 0:
-            temp_file = save_chunk_to_file(chunk_data, output_file, len(temp_files))
-            temp_files.append(temp_file)
+        # Process batch and create chunk_data
+        # ... (your existing batch processing code) ...
+        
+        # Save chunk to temporary file if we have data
+        if chunk_data is not None:
+            if (batch + 1) % chunk_save_frequency == 0:
+                temp_file = save_chunk_to_file(chunk_data, output_file, len(temp_files))
+                if os.path.exists(temp_file):  # Verify file was created
+                    temp_files.append(temp_file)
+                    print(f"Saved chunk {len(temp_files)}")
+                else:
+                    print(f"Warning: Failed to save chunk {len(temp_files)}")
             
-        # Merge chunks periodically
-        if len(temp_files) >= merge_threshold:
-            print("\nIntermediate merging of chunks...")
-            intermediate_output = f"{output_file}_intermediate.npy"
-            merge_chunks(temp_files, intermediate_output, dataset["doppler_info"])
-            temp_files = [intermediate_output]
+            # Merge chunks when threshold is reached
+            if len(temp_files) >= merge_threshold:
+                print("\nIntermediate merging of chunks...")
+                existing_files = [f for f in temp_files if os.path.exists(f)]
+                if existing_files:
+                    intermediate_output = f"{output_file}_intermediate.npy"
+                    merge_chunks(existing_files, intermediate_output, dataset["doppler_info"])
+                    temp_files = [intermediate_output]
+                else:
+                    print("Warning: No valid files to merge")
         
         # Generate SNRs
         snrs = np.random.uniform(

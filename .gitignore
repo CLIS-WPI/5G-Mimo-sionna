@@ -12,4 +12,5 @@ __pycache__/
 *.log
 *.xlsx  # Ignore all Excel files
 *.npy
+*.npz
 .codegpt
