@@ -31,6 +31,7 @@
 # in batches to improve memory efficiency during simulation.
 
 #############################
+
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -51,12 +52,54 @@ from sionna.mimo.precoding import zero_forcing_precoder, normalize_precoding_pow
 from utill.utils import db2lin, lin2db
 from config import CONFIG, MIMO_CONFIG, RESOURCE_GRID, CHANNEL_CONFIG, SIONNA_CONFIG, OUTPUT_FILES
 from sionna.ofdm import ResourceGrid
-
+import gc
+import psutil
 # Ensure output directories exist
 os.makedirs(os.path.dirname(OUTPUT_FILES["training_data"]), exist_ok=True)
 os.makedirs(os.path.dirname(OUTPUT_FILES["validation_data"]), exist_ok=True)
 os.makedirs(os.path.dirname(OUTPUT_FILES["test_data"]), exist_ok=True)
+#############################################
+def monitor_memory():
+    """Monitor current memory usage"""
+    import psutil
+    process = psutil.Process()
+    memory_info = process.memory_info()
+    print(f"Current memory usage: {memory_info.rss / 1024 / 1024:.2f} MB")
 
+def save_chunk_to_file(chunk_data, output_file, chunk_idx):
+    """Save a chunk of data to a temporary file"""
+    temp_file = f"{output_file}_chunk_{chunk_idx}.npy"
+    np.save(temp_file, chunk_data)
+    return temp_file
+
+def merge_chunks(temp_files, output_file, doppler_info):
+    """Merge temporary chunk files into final dataset"""
+    merged_data = {
+        "channel_realizations": [],
+        "snr": [],
+        "sinr": [],
+        "interference": [],
+        "user_association": [],
+        "precoding_matrices": [],
+        "doppler_info": doppler_info
+    }
+    
+    for temp_file in temp_files:
+        chunk = np.load(temp_file, allow_pickle=True).item()
+        for key in merged_data:
+            if key != "doppler_info":
+                merged_data[key].append(chunk[key])
+        os.remove(temp_file)  # Clean up temp file
+    
+    # Concatenate all chunks
+    for key in merged_data:
+        if key != "doppler_info":
+            merged_data[key] = np.concatenate(merged_data[key], axis=0)
+    
+    np.save(output_file, merged_data)
+    return merged_data
+
+#############################################
 def create_antenna_array():
     tx_array = AntennaArray(
         num_rows=1,
@@ -232,6 +275,9 @@ def generate_dataset(output_file, num_samples):
         RESOURCE_GRID["subcarriers"]  # fft_size
     ], dtype=tf.complex64)
 
+    # Initialize temp_files list before the batch loop
+    temp_files = [] 
+    
     # Generate data in batches
     for batch in range(num_samples // SIONNA_CONFIG["batch_size"]):
         batch_size = SIONNA_CONFIG["batch_size"]
@@ -302,24 +348,32 @@ def generate_dataset(output_file, num_samples):
         # Create proper user association for this batch
         user_association = np.tile(base_user_association, (batch_size, 1))
         
-        # Append batch data to dataset
-        dataset["channel_realizations"].append(channels)
-        dataset["snr"].append(snrs)
-        dataset["sinr"].append(sinr_values)
-        dataset["interference"].append(interference_values)
-        dataset["user_association"].append(user_association)
-        dataset["precoding_matrices"].append(precoding)
+        # Create chunk data
+        chunk_data = {
+            "channel_realizations": channels,
+            "snr": snrs,
+            "sinr": sinr_values,
+            "interference": interference_values,
+            "user_association": user_association,
+            "precoding_matrices": precoding
+        }
+        
+        # Save chunk to temporary file
+        temp_file = save_chunk_to_file(chunk_data, output_file, batch)
+        temp_files.append(temp_file)
         
         if (batch + 1) % 10 == 0:
             print(f"Processed batch {batch + 1}/{num_samples // SIONNA_CONFIG['batch_size']}")
+            monitor_memory()
+            # Clear memory
+            tf.keras.backend.clear_session()
+            gc.collect()
+        
+        # After all batches are processed, merge chunks
+        if batch == (num_samples // SIONNA_CONFIG["batch_size"] - 1):
+            print("\nMerging chunks...")
+            dataset = merge_chunks(temp_files, output_file, dataset["doppler_info"])
     
-    # Concatenate all batches
-    for key in dataset:
-        if key != "doppler_info":  # Skip doppler_info dictionary
-            dataset[key] = np.concatenate(dataset[key], axis=0) if len(dataset[key]) > 0 else np.array([])
-    
-    # Save dataset
-    np.save(output_file, dataset)
     print(f"\nDataset saved to {output_file}")
     print(f"\nDataset Statistics:")
     print("=" * 50)
