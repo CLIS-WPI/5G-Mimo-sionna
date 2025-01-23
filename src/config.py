@@ -39,7 +39,7 @@ CONFIG = {
     "random_seed": 42,  # Seed for reproducibility
     "output_dir": "./data/",  # Directory to store generated datasets
     "dataset_size": 1320000,        
-    "validation_size": 100000,      
+    "validation_size": 100320,      
     "test_size": 100000,           
     "noise_floor": -174,  # Noise floor in dBm/Hz
     "number_of_episodes": 100,  # Number of training episodes
