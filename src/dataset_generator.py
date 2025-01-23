@@ -75,6 +75,16 @@ def save_chunk_to_file(chunk_data, output_file, chunk_idx):
     np.savez_compressed(temp_file, **save_dict)
     return temp_file
 
+def cleanup_temp_files(temp_files):
+    """Clean up any remaining temporary files"""
+    for temp_file in temp_files:
+        try:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+                print(f"Cleaned up temporary file: {temp_file}")
+        except Exception as e:
+            print(f"Warning: Could not delete temporary file {temp_file}: {e}")
+            
 def merge_chunks(temp_files, output_file, doppler_info):
     """Merge temporary chunk files into final dataset"""
     merged_data = {
@@ -87,27 +97,36 @@ def merge_chunks(temp_files, output_file, doppler_info):
         "doppler_info": doppler_info
     }
     
+    # First verify all files exist
+    existing_files = []
     for temp_file in temp_files:
+        if os.path.exists(temp_file):
+            existing_files.append(temp_file)
+        else:
+            print(f"Warning: Chunk file {temp_file} not found")
+    
+    if not existing_files:
+        print("Error: No valid chunk files found to merge")
+        return merged_data
+        
+    # Process existing files
+    for temp_file in existing_files:
         try:
-            if os.path.exists(temp_file):
-                with np.load(temp_file, allow_pickle=True) as chunk:
-                    # Process each array in the npz file
-                    for key in merged_data:
-                        if key != "doppler_info" and key in chunk:
-                            merged_data[key].append(chunk[key])
-                try:
-                    os.remove(temp_file)  # Clean up temp file
-                except OSError:
-                    print(f"Warning: Could not delete temporary file {temp_file}")
-            else:
-                print(f"Warning: Chunk file {temp_file} not found")
+            with np.load(temp_file, allow_pickle=True) as chunk:
+                for key in merged_data:
+                    if key != "doppler_info" and key in chunk:
+                        merged_data[key].append(chunk[key])
+            try:
+                os.remove(temp_file)
+                print(f"Cleaned up temporary file: {temp_file}")
+            except OSError as e:
+                print(f"Warning: Could not delete temporary file {temp_file}: {e}")
         except Exception as e:
             print(f"Error processing chunk file {temp_file}: {str(e)}")
             continue
     
     # Only concatenate if we have data to merge
     if any(len(merged_data[key]) > 0 for key in merged_data if key != "doppler_info"):
-        # Concatenate all chunks
         for key in merged_data:
             if key != "doppler_info":
                 try:
@@ -245,8 +264,23 @@ def validate_doppler_params():
         raise ValueError(f"Invalid Doppler parameters: {str(e)}")
     except KeyError as e:
         raise KeyError(f"Missing Doppler parameter: {str(e)}")
+    
+def validate_batch_size(num_samples, batch_size):
+    """Validate that batch size divides total samples evenly"""
+    if num_samples % batch_size != 0:
+        raise ValueError(
+            f"Number of samples ({num_samples}) must be divisible by "
+            f"batch size ({batch_size})"
+        )
+
+def print_progress(batch, total_batches):
+    """Print progress bar for batch processing"""
+    progress = (batch + 1) / total_batches * 100
+    print(f"\rProgress: [{batch + 1}/{total_batches}] {progress:.1f}%", end="")
 
 def generate_dataset(output_file, num_samples):
+    validate_batch_size(num_samples, SIONNA_CONFIG["batch_size"])
+    total_batches = num_samples // SIONNA_CONFIG["batch_size"]
     print(f"Generating dataset: {output_file} with {num_samples} samples...")
     
     # Initialize variables for chunk management
@@ -317,10 +351,10 @@ def generate_dataset(output_file, num_samples):
         # Save chunk to temporary file if we have data
         if chunk_data is not None:
     
-            # Save chunks less frequently
+            # Only save chunks at specified frequency
             if (batch + 1) % chunk_save_frequency == 0:
-                temp_file = save_chunk_to_file(chunk_data, output_file, batch)  # Use batch number instead of len(temp_files)
-                if os.path.exists(temp_file):  # Verify file was created
+                temp_file = save_chunk_to_file(chunk_data, output_file, batch)
+                if os.path.exists(temp_file):
                     temp_files.append(temp_file)
                     print(f"Saved chunk {batch}")
                 else:
@@ -415,9 +449,6 @@ def generate_dataset(output_file, num_samples):
             "precoding_matrices": precoding
         }
         
-        # Save chunk to temporary file
-        temp_file = save_chunk_to_file(chunk_data, output_file, batch)
-        temp_files.append(temp_file)
         
         if (batch + 1) % 10 == 0:
             print(f"Processed batch {batch + 1}/{num_samples // SIONNA_CONFIG['batch_size']}")
@@ -467,7 +498,9 @@ def generate_dataset(output_file, num_samples):
     print(f"Contains Inf values: {'Yes' if has_inf else 'No'}")
     
     print("\n" + "=" * 50)
-    
+
+    # Clean up any remaining temporary files
+    cleanup_temp_files(temp_files)
     return dataset
 
 if __name__ == "__main__":
