@@ -31,7 +31,7 @@
 # in batches to improve memory efficiency during simulation.
 
 #############################
-
+import time
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -70,10 +70,16 @@ def monitor_memory():
 def save_chunk_to_file(chunk_data, output_file, chunk_idx):
     """Save a chunk of data to a temporary file with compression"""
     temp_file = f"{output_file}_chunk_{chunk_idx}.npz"
-    # Save each key separately in the compressed file
-    save_dict = {key: chunk_data[key] for key in chunk_data if key != "doppler_info"}
-    np.savez_compressed(temp_file, **save_dict)
-    return temp_file
+    try:
+        # Save each key separately in the compressed file
+        save_dict = {key: chunk_data[key] for key in chunk_data if key != "doppler_info"}
+        np.savez_compressed(temp_file, **save_dict)
+        # Explicitly close any file handles
+        np.load(temp_file).close()
+        return temp_file
+    except Exception as e:
+        print(f"Error saving chunk to file: {str(e)}")
+        return None
 
 def cleanup_temp_files(temp_files):
     """Clean up any remaining temporary files"""
@@ -104,17 +110,20 @@ def merge_chunks(temp_files, output_file, doppler_info):
             continue
             
         try:
-            # Load NPY file without context manager
+            # Load data differently based on file type
             if temp_file.endswith('.npy'):
-                chunk = np.load(temp_file, allow_pickle=True).item()
-            else:  # NPZ file
                 chunk = np.load(temp_file, allow_pickle=True)
+                if isinstance(chunk, np.ndarray):
+                    chunk = chunk.item()  # Convert ndarray to dictionary if needed
+            else:  # NPZ file
+                chunk = dict(np.load(temp_file, allow_pickle=True))
                 
+            # Append data from chunk
             for key in merged_data:
                 if key != "doppler_info" and key in chunk:
                     merged_data[key].append(chunk[key])
                     
-            # Clean up after successful processing
+            # Clean up temporary file
             try:
                 os.remove(temp_file)
                 print(f"Cleaned up temporary file: {temp_file}")
