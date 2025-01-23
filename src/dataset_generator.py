@@ -66,10 +66,11 @@ def monitor_memory():
     memory_info = process.memory_info()
     print(f"Current memory usage: {memory_info.rss / 1024 / 1024:.2f} MB")
 
+#function to save less frequently:
 def save_chunk_to_file(chunk_data, output_file, chunk_idx):
-    """Save a chunk of data to a temporary file"""
-    temp_file = f"{output_file}_chunk_{chunk_idx}.npy"
-    np.save(temp_file, chunk_data)
+    """Save a chunk of data to a temporary file with compression"""
+    temp_file = f"{output_file}_chunk_{chunk_idx}.npz"  # Use .npz instead of .npy
+    np.savez_compressed(temp_file, **chunk_data)  # Use compressed format
     return temp_file
 
 def merge_chunks(temp_files, output_file, doppler_info):
@@ -220,8 +221,12 @@ def validate_doppler_params():
         raise KeyError(f"Missing Doppler parameter: {str(e)}")
 
 def generate_dataset(output_file, num_samples):
-    """Generate dataset with improved SINR calculation and multi-user support"""
     print(f"Generating dataset: {output_file} with {num_samples} samples...")
+    
+    # Increase batch size for better memory management
+    temp_files = []
+    chunk_save_frequency = 5  # Save every 5 batches
+    merge_threshold = 10      # Merge after 10 chunks
     
     # Calculate and print coherence time at the start
     coherence_time = calculate_coherence_time()
@@ -277,10 +282,22 @@ def generate_dataset(output_file, num_samples):
 
     # Initialize temp_files list before the batch loop
     temp_files = [] 
-    
+
     # Generate data in batches
     for batch in range(num_samples // SIONNA_CONFIG["batch_size"]):
         batch_size = SIONNA_CONFIG["batch_size"]
+        
+        # Save chunks less frequently
+        if (batch + 1) % chunk_save_frequency == 0:
+            temp_file = save_chunk_to_file(chunk_data, output_file, len(temp_files))
+            temp_files.append(temp_file)
+            
+        # Merge chunks periodically
+        if len(temp_files) >= merge_threshold:
+            print("\nIntermediate merging of chunks...")
+            intermediate_output = f"{output_file}_intermediate.npy"
+            merge_chunks(temp_files, intermediate_output, dataset["doppler_info"])
+            temp_files = [intermediate_output]
         
         # Generate SNRs
         snrs = np.random.uniform(
