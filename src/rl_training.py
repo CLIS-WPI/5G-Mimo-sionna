@@ -261,33 +261,25 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
     return sinr
 
 def train_sac(training_data, validation_data, config):
-    # Initialize training history first
+    """
+    Train the Soft Actor-Critic model
+    
+    Args:
+        training_data: Tuple of (channel_realizations, snr) for training
+        validation_data: Tuple of (channel_realizations, snr) for validation
+        config: Dictionary containing training configuration parameters
+    
+    Returns:
+        sac: Trained SAC model
+        training_history: Dictionary containing training metrics
+    """
+    # Initialize training history
     training_history = {
         'episode_rewards': [],
         'critic_losses': [],
         'actor_losses': []
     }
     
-    # Define preprocessing function before using it
-    def preprocess_channel_data(channel_data):
-        channel_data = tf.cast(channel_data, tf.complex64)
-        real_part = tf.math.real(channel_data)
-        imag_part = tf.math.imag(channel_data)
-        processed_data = tf.stack([real_part, imag_part], axis=-1)
-        processed_data = tf.cast(processed_data, tf.float32)
-        batch_size = tf.shape(processed_data)[0]
-        feature_dim = np.prod(processed_data.shape[1:])
-        processed_data = tf.reshape(processed_data, [batch_size, -1])
-        return processed_data
-    
-    # Now use the function
-    training_channels = preprocess_channel_data(training_data[0])
-    validation_channels = preprocess_channel_data(validation_data[0])
-    
-    # Calculate input shape...
-    input_shape = training_channels.shape[1:]
-
-    # Convert complex channel data to magnitude and phase
     def preprocess_channel_data(channel_data):
         """
         Preprocess channel data by separating real and imaginary parts
@@ -316,7 +308,7 @@ def train_sac(training_data, validation_data, config):
         
         return processed_data
     
-    # Preprocess training and validation data
+    # Process training and validation data
     training_channels = preprocess_channel_data(training_data[0])
     validation_channels = preprocess_channel_data(validation_data[0])
 
@@ -324,13 +316,18 @@ def train_sac(training_data, validation_data, config):
     input_shape = training_channels.shape[1:]  # This will be a single dimension now
 
     def validate_shapes(batch_channels, actions):
-        """Validate shapes of inputs"""
-        if len(batch_channels.shape) != 2:  # [batch_size, flattened_features]
+        """
+        Validate shapes of inputs
+        Args:
+            batch_channels: Preprocessed channel data
+            actions: Action vectors from the actor network
+        """
+        if len(batch_channels.shape) != 2:
             raise ValueError(f"Expected batch_channels shape [batch_size, flattened_features], got {batch_channels.shape}")
         if len(actions.shape) != 2:
             raise ValueError(f"Expected actions shape [batch_size, num_actions], got {actions.shape}")
-        
-    # Single, correct initialization
+    
+    # Initialize SAC model
     sac = SoftActorCritic(
         input_shape=input_shape,
         num_actions=MIMO_CONFIG["tx_antennas"],
@@ -351,15 +348,12 @@ def train_sac(training_data, validation_data, config):
             with tqdm(total=total_batches, desc=f"Episode {episode+1}", leave=False) as batch_pbar:
                 for start in range(0, len(training_data[0]), config["batch_size"]):
                     end = start + config["batch_size"]
-                    batch_channels = training_data[0][start:end]
+                    batch_channels = training_channels[start:end]
                     batch_snr = training_data[1][start:end]
-                    
-                    # Convert to tensor and ensure proper shape with batch dimension
-                    batch_channels = tf.convert_to_tensor(batch_channels, dtype=tf.float32)
                     
                     # Use gradient tape for tracking gradients
                     with tf.GradientTape(persistent=True) as tape:
-                        # Get actions for the entire batch at once
+                        # Get actions for the entire batch
                         actions = sac.get_action(batch_channels)
 
                         # Validate shapes before proceeding
@@ -433,66 +427,64 @@ def train_sac(training_data, validation_data, config):
                 val_reward = validate_model(sac, validation_data)
                 tqdm.write(f"\nValidation reward at episode {episode+1}: {val_reward:.3f}\n")
 
-            # Create directories for saving results
-            results_dir = "./results"
-            metrics_dir = os.path.join(results_dir, "performance_metrics")
-            viz_dir = os.path.join(results_dir, "visualizations")
-            xai_dir = os.path.join(results_dir, "xai_analysis")
-            
-            for directory in [metrics_dir, viz_dir, xai_dir]:
-                if not os.path.exists(directory):
-                    os.makedirs(directory)
-            
-            # Save performance metrics
-            metrics = {
-                'episode_rewards': training_history['episode_rewards'],
-                'critic_losses': training_history['critic_losses'],
-                'actor_losses': training_history['actor_losses']
-            }
-            np.save(f"{metrics_dir}/training_metrics.npy", metrics)
-            
-            # Save training plots
-            plt.figure(figsize=(10, 6))
-            plt.plot(training_history['episode_rewards'])
-            plt.title('Episode Rewards')
-            plt.xlabel('Step')
-            plt.ylabel('Reward')
-            plt.savefig(f"{viz_dir}/rewards_plot.png")
-            plt.close()
-            
-            plt.figure(figsize=(10, 6))
-            plt.plot(training_history['critic_losses'])
-            plt.title('Critic Losses')
-            plt.xlabel('Step')
-            plt.ylabel('Loss')
-            plt.savefig(f"{viz_dir}/critic_losses_plot.png")
-            plt.close()
-            
-            plt.figure(figsize=(10, 6))
-            plt.plot(training_history['actor_losses'])
-            plt.title('Actor Losses')
-            plt.xlabel('Step')
-            plt.ylabel('Loss')
-            plt.savefig(f"{viz_dir}/actor_losses_plot.png")
-            plt.close()
-
-            # Save models
-            model_dir = os.path.join(results_dir, "models")
-            if not os.path.exists(model_dir):
-                os.makedirs(model_dir)
+            # Save results and visualizations
+            if episode % config["save_interval"] == 0:
+                # Create directories for saving results
+                results_dir = "./results"
+                metrics_dir = os.path.join(results_dir, "performance_metrics")
+                viz_dir = os.path.join(results_dir, "visualizations")
+                model_dir = os.path.join(results_dir, "models")
                 
-            sac.actor.save(os.path.join(model_dir, "actor_model"))
-            sac.critic1.save(os.path.join(model_dir, "critic1_model"))
-            sac.critic2.save(os.path.join(model_dir, "critic2_model"))
-            np.save(os.path.join(model_dir, "alpha.npy"), sac.alpha.numpy())
+                for directory in [metrics_dir, viz_dir, model_dir]:
+                    if not os.path.exists(directory):
+                        os.makedirs(directory)
+                
+                # Save performance metrics
+                metrics = {
+                    'episode_rewards': training_history['episode_rewards'],
+                    'critic_losses': training_history['critic_losses'],
+                    'actor_losses': training_history['actor_losses']
+                }
+                np.save(f"{metrics_dir}/training_metrics.npy", metrics)
+                
+                # Save training plots
+                plt.figure(figsize=(10, 6))
+                plt.plot(training_history['episode_rewards'])
+                plt.title('Episode Rewards')
+                plt.xlabel('Step')
+                plt.ylabel('Reward')
+                plt.savefig(f"{viz_dir}/rewards_plot.png")
+                plt.close()
+                
+                plt.figure(figsize=(10, 6))
+                plt.plot(training_history['critic_losses'])
+                plt.title('Critic Losses')
+                plt.xlabel('Step')
+                plt.ylabel('Loss')
+                plt.savefig(f"{viz_dir}/critic_losses_plot.png")
+                plt.close()
+                
+                plt.figure(figsize=(10, 6))
+                plt.plot(training_history['actor_losses'])
+                plt.title('Actor Losses')
+                plt.xlabel('Step')
+                plt.ylabel('Loss')
+                plt.savefig(f"{viz_dir}/actor_losses_plot.png")
+                plt.close()
 
-            print("Training complete.")
-            print(f"\nResults saved in:")
-            print(f"Performance metrics: {metrics_dir}")
-            print(f"Visualizations: {viz_dir}")
-            print(f"Models: {model_dir}")
-            
-            return sac, training_history
+                # Save models
+                sac.actor.save(os.path.join(model_dir, "actor_model"))
+                sac.critic1.save(os.path.join(model_dir, "critic1_model"))
+                sac.critic2.save(os.path.join(model_dir, "critic2_model"))
+                np.save(os.path.join(model_dir, "alpha.npy"), sac.alpha.numpy())
+
+    print("Training complete.")
+    print(f"\nResults saved in:")
+    print(f"Performance metrics: {metrics_dir}")
+    print(f"Visualizations: {viz_dir}")
+    print(f"Models: {model_dir}")
+    
+    return sac, training_history
 
 # Validation function
 def validate_model(sac, validation_data):
