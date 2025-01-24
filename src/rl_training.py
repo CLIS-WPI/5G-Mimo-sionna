@@ -66,6 +66,36 @@ def load_dataset(file_path):
     except Exception as e:
         print(f"Error loading dataset from {file_path}: {str(e)}")
         raise
+def preprocess_channel_data(channel_data):
+    """
+    Preprocess channel data by separating real and imaginary parts while maintaining structure
+    Args:
+        channel_data: Input channel realizations [batch_size, num_rx, num_rx_ant, num_tx, num_tx_ant]
+    Returns:
+        Original channel data for SINR computation and flattened data for the neural network
+    """
+    # Convert to complex tensor
+    channel_data = tf.cast(channel_data, tf.complex64)
+        
+    # Keep original data for SINR computation
+    original_data = channel_data
+        
+    # Separate real and imaginary parts
+    real_part = tf.math.real(channel_data)
+    imag_part = tf.math.imag(channel_data)
+        
+    # Stack real and imaginary parts along a new axis
+    processed_data = tf.stack([real_part, imag_part], axis=-1)
+        
+    # Convert to float32 for the neural network
+    processed_data = tf.cast(processed_data, tf.float32)
+        
+    # Reshape to combine all features
+    batch_size = tf.shape(processed_data)[0]
+    feature_dim = np.prod(processed_data.shape[1:])
+    flattened_data = tf.reshape(processed_data, [batch_size, -1])
+        
+    return original_data, flattened_data
 
 # Define the SAC model class
 class SoftActorCritic:
@@ -307,41 +337,13 @@ def train_sac(training_data, validation_data, config):
         with open(os.path.join(checkpoint_dir, "history.json"), "w") as f:
             json.dump({k: [float(v) for v in vals] for k, vals in history.items()}, f)
             
-    def preprocess_channel_data(channel_data):
-        """
-        Preprocess channel data by separating real and imaginary parts
-        Args:
-            channel_data: Input channel realizations [batch_size, num_rx, num_rx_ant, num_tx, num_tx_ant]
-        Returns:
-            Preprocessed channel data with real and imaginary parts
-        """
-        # Convert to complex tensor
-        channel_data = tf.cast(channel_data, tf.complex64)
-        
-        # Separate real and imaginary parts
-        real_part = tf.math.real(channel_data)
-        imag_part = tf.math.imag(channel_data)
-        
-        # Stack real and imaginary parts along a new axis
-        processed_data = tf.stack([real_part, imag_part], axis=-1)
-        
-        # Convert to float32 for the neural network
-        processed_data = tf.cast(processed_data, tf.float32)
-        
-        # Reshape to combine all features
-        batch_size = tf.shape(processed_data)[0]
-        feature_dim = np.prod(processed_data.shape[1:])
-        processed_data = tf.reshape(processed_data, [batch_size, -1])
-        
-        return processed_data
     
     # Process training and validation data
-    training_channels = preprocess_channel_data(training_data[0])
-    validation_channels = preprocess_channel_data(validation_data[0])
+    (training_channels_orig, training_channels_flat), training_snr = training_data 
+    (validation_channels_orig, validation_channels_flat), validation_snr = validation_data
 
     # Calculate input shape after preprocessing
-    input_shape = training_channels.shape[1:]  # This will be a single dimension now
-
+    input_shape = training_channels_flat.shape[1:]
     def validate_shapes(batch_channels, actions):
         """
         Validate shapes of inputs
@@ -373,22 +375,23 @@ def train_sac(training_data, validation_data, config):
             # Batch training with progress bar
             total_batches = len(training_data[0]) // config["batch_size"]
             with tqdm(total=total_batches, desc=f"Episode {episode+1}", leave=False) as batch_pbar:
+                # In the training loop, modify the batch processing:
                 for start in range(0, len(training_data[0]), config["batch_size"]):
                     end = start + config["batch_size"]
-                    batch_channels = training_channels[start:end]
+                    batch_channels_orig = training_channels_orig[start:end]  # Original structure for SINR
+                    batch_channels_flat = training_channels_flat[start:end]  # Flattened for NN
                     batch_snr = training_data[1][start:end]
                     
-                    # Use gradient tape for tracking gradients
                     with tf.GradientTape(persistent=True) as tape:
-                        # Get actions for the entire batch
-                        actions = sac.get_action(batch_channels)
+                        # Get actions using flattened data
+                        actions = sac.get_action(batch_channels_flat)
 
                         # Validate shapes before proceeding
-                        validate_shapes(batch_channels, actions)
+                        validate_shapes(batch_channels_flat, actions)
                         
-                        # Compute rewards
-                        sinr_values = compute_sinr(batch_channels, actions)
-                        interference_levels = compute_interference(batch_channels, actions)
+                        # Compute rewards using original structure
+                        sinr_values = compute_sinr(batch_channels_orig, actions)
+                        interference_levels = compute_interference(batch_channels_orig, actions)
                         rewards = tf.convert_to_tensor(
                             [compute_reward(snr, sinr, interference) 
                             for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)],
@@ -396,15 +399,15 @@ def train_sac(training_data, validation_data, config):
                         )
                         
                         # Critic loss computation
-                        critic1_value = sac.critic1([batch_channels, actions])
-                        critic2_value = sac.critic2([batch_channels, actions])
+                        critic1_value = sac.critic1([batch_channels_flat, actions])
+                        critic2_value = sac.critic2([batch_channels_flat, actions])
                         
                         # Use minimum of critics (Double Q-learning)
                         min_critic = tf.minimum(critic1_value, critic2_value)
                         critic_loss = tf.reduce_mean(tf.square(rewards - tf.squeeze(min_critic)))
                         
                         # Actor loss with entropy regularization
-                        actor_probs = sac.actor(batch_channels)
+                        actor_probs = sac.actor(batch_channels_flat)
                         log_probs = tf.math.log(actor_probs + 1e-10)
                         entropy = -tf.reduce_sum(actor_probs * log_probs, axis=-1)
                         actor_loss = -tf.reduce_mean(rewards + sac.alpha * entropy)
@@ -517,22 +520,23 @@ def train_sac(training_data, validation_data, config):
 
 # Validation function
 def validate_model(sac, validation_data):
-    val_channels, val_snr = validation_data
+    val_channels_orig, val_channels_flat = validation_data
     total_reward = 0
     
-    total_batches = len(val_channels) // CONFIG["batch_size"]
+    total_batches = len(val_channels_orig) // CONFIG["batch_size"]
     with tqdm(total=total_batches, desc="Validating", leave=False) as val_pbar:
-        for start in range(0, len(val_channels), CONFIG["batch_size"]):
+        for start in range(0, len(val_channels_orig), CONFIG["batch_size"]):
             end = start + CONFIG["batch_size"]
-            batch_channels = val_channels[start:end]
-            batch_snr = val_snr[start:end]
+            batch_channels_orig = val_channels_orig[start:end]
+            batch_channels_flat = val_channels_flat[start:end]
+            batch_snr = validation_data[1][start:end]
 
-            # Simulate actions and compute rewards
-            actions = np.array([sac.get_action(state) for state in batch_channels])
+            # Get actions using flattened data
+            actions = sac.get_action(batch_channels_flat)
             
-            # Compute SINR and interference for validation
-            sinr_values = compute_sinr(batch_channels, actions)
-            interference_levels = compute_interference(batch_channels, actions)
+            # Compute metrics using original structure
+            sinr_values = compute_sinr(batch_channels_orig, actions)
+            interference_levels = compute_interference(batch_channels_orig, actions)
             
             # Calculate rewards using the same reward function
             rewards = np.array([compute_reward(snr, sinr, interference) 
@@ -554,20 +558,27 @@ if __name__ == "__main__":
         training_data = load_dataset(OUTPUT_FILES["training_data"])
         validation_data = load_dataset(OUTPUT_FILES["validation_data"])
 
-        # Training configuration
+        # Define training configuration
         train_config = {
             "episodes": CONFIG["number_of_episodes"],
             "batch_size": CONFIG["mini_batch_size"],
             "actor_lr": CONFIG["actor_lr"],
             "critic_lr": CONFIG["critic_lr"],
             "alpha_lr": CONFIG["alpha_lr"],
-            "validation_interval": 10,
+            "validation_interval": CONFIG["validation_interval"],
             "save_interval": CONFIG.get("checkpoint_interval", 10)
         }
 
-        # Train the SAC model
-        print("Starting training...")
-        sac, history = train_sac(training_data, validation_data, train_config)
+        # Process data
+        training_channels_orig, training_channels_flat = preprocess_channel_data(training_data[0])
+        validation_channels_orig, validation_channels_flat = preprocess_channel_data(validation_data[0])
+
+        # Create processed datasets
+        processed_training_data = ((training_channels_orig, training_channels_flat), training_data[1])
+        processed_validation_data = ((validation_channels_orig, validation_channels_flat), validation_data[1])
+
+        # Train the model
+        sac, history = train_sac(processed_training_data, processed_validation_data, train_config)
         print("Training completed successfully")
         
     except Exception as e:
