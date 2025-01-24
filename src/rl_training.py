@@ -44,6 +44,8 @@
 
 import os
 import logging
+import gc
+import json
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress TF logging
 logging.getLogger('tensorflow').setLevel(logging.ERROR)
 import numpy as np
@@ -56,8 +58,14 @@ import matplotlib.pyplot as plt
 # Load training and validation datasets
 def load_dataset(file_path):
     print(f"Loading dataset from {file_path}...")
-    data = np.load(file_path, allow_pickle=True).item()
-    return data["channel_realizations"], data["snr"]
+    try:
+        data = np.load(file_path, allow_pickle=True).item()
+        if "channel_realizations" not in data or "snr" not in data:
+            raise ValueError("Dataset missing required fields")
+        return data["channel_realizations"], data["snr"]
+    except Exception as e:
+        print(f"Error loading dataset from {file_path}: {str(e)}")
+        raise
 
 # Define the SAC model class
 class SoftActorCritic:
@@ -277,9 +285,28 @@ def train_sac(training_data, validation_data, config):
     training_history = {
         'episode_rewards': [],
         'critic_losses': [],
-        'actor_losses': []
+        'actor_losses': [],
+        'validation_rewards': [],
+        'validation_episodes': []
     }
     
+    # Inside train_sac function, add checkpoint saving:
+    def save_checkpoint(sac, history, episode, save_dir):
+        checkpoint_dir = os.path.join(save_dir, f"checkpoint_ep_{episode}")
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        # Save models
+        sac.actor.save(os.path.join(checkpoint_dir, "actor"))
+        sac.critic1.save(os.path.join(checkpoint_dir, "critic1"))
+        sac.critic2.save(os.path.join(checkpoint_dir, "critic2"))
+        
+        # Save alpha
+        np.save(os.path.join(checkpoint_dir, "alpha.npy"), sac.alpha.numpy())
+        
+        # Save history
+        with open(os.path.join(checkpoint_dir, "history.json"), "w") as f:
+            json.dump({k: [float(v) for v in vals] for k, vals in history.items()}, f)
+            
     def preprocess_channel_data(channel_data):
         """
         Preprocess channel data by separating real and imaginary parts
@@ -425,6 +452,8 @@ def train_sac(training_data, validation_data, config):
             # Validate performance
             if episode % config["validation_interval"] == 0:
                 val_reward = validate_model(sac, validation_data)
+                training_history['validation_rewards'].append(float(val_reward))
+                training_history['validation_episodes'].append(episode)
                 tqdm.write(f"\nValidation reward at episode {episode+1}: {val_reward:.3f}\n")
 
             # Save results and visualizations
@@ -519,19 +548,28 @@ def validate_model(sac, validation_data):
         return avg_reward
 
 if __name__ == "__main__":
-    # Load datasets
-    training_data = load_dataset(OUTPUT_FILES["training_data"])
-    validation_data = load_dataset(OUTPUT_FILES["validation_data"])
+    try:
+        # Load datasets
+        print("Loading datasets...")
+        training_data = load_dataset(OUTPUT_FILES["training_data"])
+        validation_data = load_dataset(OUTPUT_FILES["validation_data"])
 
-    # Training configuration
-    train_config = {
-        "episodes": CONFIG["number_of_episodes"],
-        "batch_size": CONFIG["mini_batch_size"],
-        "actor_lr": CONFIG["actor_lr"],
-        "critic_lr": CONFIG["critic_lr"],
-        "alpha_lr": CONFIG["alpha_lr"],
-        "validation_interval": 10
-    }
+        # Training configuration
+        train_config = {
+            "episodes": CONFIG["number_of_episodes"],
+            "batch_size": CONFIG["mini_batch_size"],
+            "actor_lr": CONFIG["actor_lr"],
+            "critic_lr": CONFIG["critic_lr"],
+            "alpha_lr": CONFIG["alpha_lr"],
+            "validation_interval": 10,
+            "save_interval": CONFIG.get("checkpoint_interval", 10)
+        }
 
-    # Train the SAC model
-    train_sac(training_data, validation_data, train_config)
+        # Train the SAC model
+        print("Starting training...")
+        sac, history = train_sac(training_data, validation_data, train_config)
+        print("Training completed successfully")
+        
+    except Exception as e:
+        print(f"Error during training: {str(e)}")
+        raise
