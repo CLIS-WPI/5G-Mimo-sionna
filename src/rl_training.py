@@ -94,12 +94,10 @@ class SoftActorCritic:
         return model
 
     def build_critic(self, input_shape, num_actions, lr):
-        # State input branch
-        state_input = layers.Input(shape=input_shape)
-        x = layers.Reshape((-1, input_shape[-2] * input_shape[-1]))(state_input)
-        x = layers.Dense(256, activation="relu")(x)
+        # State input branch should match flattened input
+        state_input = layers.Input(shape=(np.prod(input_shape),))  # Flattened input
+        x = layers.Dense(256, activation="relu")(state_input)
         x = layers.Dense(128, activation="relu")(x)
-        x = layers.Flatten()(x)
         
         # Action input branch
         action_input = layers.Input(shape=(num_actions,))
@@ -263,16 +261,28 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
     return sinr
 
 def train_sac(training_data, validation_data, config):
-    # Preprocess data...
-    training_channels = preprocess_channel_data(training_data[0])
-    validation_channels = preprocess_channel_data(validation_data[0])
-    
-    # Initialize training history dictionary
+    # Initialize training history first
     training_history = {
         'episode_rewards': [],
         'critic_losses': [],
         'actor_losses': []
     }
+    
+    # Define preprocessing function before using it
+    def preprocess_channel_data(channel_data):
+        channel_data = tf.cast(channel_data, tf.complex64)
+        real_part = tf.math.real(channel_data)
+        imag_part = tf.math.imag(channel_data)
+        processed_data = tf.stack([real_part, imag_part], axis=-1)
+        processed_data = tf.cast(processed_data, tf.float32)
+        batch_size = tf.shape(processed_data)[0]
+        feature_dim = np.prod(processed_data.shape[1:])
+        processed_data = tf.reshape(processed_data, [batch_size, -1])
+        return processed_data
+    
+    # Now use the function
+    training_channels = preprocess_channel_data(training_data[0])
+    validation_channels = preprocess_channel_data(validation_data[0])
     
     # Calculate input shape...
     input_shape = training_channels.shape[1:]
@@ -313,14 +323,14 @@ def train_sac(training_data, validation_data, config):
     # Calculate input shape after preprocessing
     input_shape = training_channels.shape[1:]  # This will be a single dimension now
 
-    # First add the validate_shapes function definition
     def validate_shapes(batch_channels, actions):
         """Validate shapes of inputs"""
         if len(batch_channels.shape) != 2:  # [batch_size, flattened_features]
             raise ValueError(f"Expected batch_channels shape [batch_size, flattened_features], got {batch_channels.shape}")
         if len(actions.shape) != 2:
-            raise ValueError(f"Expected actions shape [batch_size, num_actions], got {actions.shape}")ValueError(f"Expected actions shape [batch_size, num_actions], got {actions.shape}")
-
+            raise ValueError(f"Expected actions shape [batch_size, num_actions], got {actions.shape}")
+        
+    # Single, correct initialization
     sac = SoftActorCritic(
         input_shape=input_shape,
         num_actions=MIMO_CONFIG["tx_antennas"],
