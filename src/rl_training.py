@@ -90,13 +90,13 @@ class SoftActorCritic:
         """
         Get actions for a batch of states
         Args:
-            state: Batch of states with shape [batch_size, state_shape]
+            state: Batch of states with shape [batch_size, state_dim]
         Returns:
             actions: Batch of actions with shape [batch_size, num_actions]
         """
-        # Ensure state has correct shape
-        if len(state.shape) == 2:
-            state = tf.expand_dims(state, axis=-1)
+        # Ensure state has correct shape including batch dimension
+        if len(state.shape) == 4:  # If missing batch dimension
+            state = tf.expand_dims(state, axis=0)  # Add batch dimension
         
         # Get action probabilities for entire batch
         action_probs = self.actor(state)
@@ -201,6 +201,7 @@ def train_sac(training_data, validation_data, config):
     )
 
     # Training loop
+    # Training loop
     for episode in range(config["episodes"]):
         print(f"Episode {episode+1}/{config['episodes']}")
 
@@ -210,27 +211,15 @@ def train_sac(training_data, validation_data, config):
             batch_channels = training_data[0][start:end]
             batch_snr = training_data[1][start:end]
             
-            #  Ensure batch_channels is properly shaped before getting actions
+            # Convert to tensor and ensure proper shape with batch dimension
             batch_channels = tf.convert_to_tensor(batch_channels, dtype=tf.float32)
+            
+            # Get actions for the entire batch at once
+            actions = sac.get_action(batch_channels)  # This will handle the full batch
 
-            # Simulate actions and compute rewards
-            actions = np.array([sac.get_action(state) for state in batch_channels])
-
-            # Ensure actions have the correct shape (batch_size, num_actions)
-            actions = sac.get_action(batch_channels)  # Flatten actions to the correct shape
-
-            # Ensure batch size is the same for batch_channels and actions
-            if batch_channels.shape[0] != actions.shape[0]:
-                raise ValueError(f"Batch size mismatch: batch_channels size {batch_channels.shape[0]}, actions size {actions.shape[0]}")
-
-            # Inside train_sac function, replace:
-            rewards = batch_snr  # Using SNR as reward
-
-            # Compute SINR and interference
+            # Compute rewards using batch operations
             sinr_values = compute_sinr(batch_channels, actions)
             interference_levels = compute_interference(batch_channels, actions)
-
-            # Calculate rewards using the reward function
             rewards = np.array([compute_reward(snr, sinr, interference) 
                             for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)])
 
