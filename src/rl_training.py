@@ -183,26 +183,26 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
     Returns:
         sinr_values: SINR values [batch_size]
     """
+    # Print shapes for debugging
+    print("h shape:", tf.shape(channel_state))  # [256, 4, 4, 14, 64]
+    print("w shape:", tf.shape(beamforming_vectors))  # [256, 4]
+    
     # Convert to complex tensors
     h = tf.cast(channel_state, tf.complex64)
     w = tf.cast(beamforming_vectors, tf.complex64)
     
     # Get dimensions
-    batch_size = tf.shape(h)[0]  # 256
-    num_rx = tf.shape(h)[1]      # 4
-    num_rx_ant = tf.shape(h)[2]  # 4
-    num_tx = tf.shape(h)[3]      # 14
-    num_tx_ant = tf.shape(h)[4]  # 64
+    batch_size = tf.shape(h)[0]
+    num_rx = tf.shape(h)[1]
+    num_rx_ant = tf.shape(h)[2]
+    num_tx = tf.shape(h)[3]
+    num_tx_ant = tf.shape(h)[4]
     
-    # Print shapes for debugging
-    print("h shape:", tf.shape(h))  # [256, 4, 4, 14, 64]
-    print("w shape:", tf.shape(w))  # [256, 4]
-    
-    # Reshape h to handle the MIMO structure correctly
-    # We need to preserve the batch dimension and combine the antenna dimensions appropriately
+    # Reshape h to [batch_size, num_rx * num_rx_ant, num_tx * num_tx_ant]
     h_reshaped = tf.reshape(h, [batch_size, num_rx * num_rx_ant, num_tx * num_tx_ant])
     
-    # Reshape w to match dimensions for matrix multiplication
+    # Reshape w to match the last dimension of h_reshaped
+    # Need to reshape w to [batch_size, num_tx * num_tx_ant, 1]
     w_reshaped = tf.reshape(w, [batch_size, num_tx_ant, 1])
     
     # Print reshaped dimensions for debugging
