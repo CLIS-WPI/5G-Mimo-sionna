@@ -57,6 +57,7 @@ def load_dataset(file_path):
 # Define the SAC model class
 class SoftActorCritic:
     def __init__(self, input_shape, num_actions, learning_rates):
+        self.num_actions = num_actions
         self.actor = self.build_actor(input_shape, num_actions, learning_rates["actor"])
         self.critic1 = self.build_critic(input_shape, num_actions, learning_rates["critic"])
         self.critic2 = self.build_critic(input_shape, num_actions, learning_rates["critic"])
@@ -86,13 +87,28 @@ class SoftActorCritic:
         return model
 
     def get_action(self, state):
-        # Ensure state is in the correct batch format (batch_size, state_shape)
-        state = tf.convert_to_tensor(state, dtype=tf.float32)
-        state = tf.expand_dims(state, axis=0)  # Add batch dimension if it's missing
-        action_prob = self.actor(state)
-        action = tf.random.categorical(action_prob, 1)
-        return action.numpy().flatten()
-
+        """
+        Get actions for a batch of states
+        Args:
+            state: Batch of states with shape [batch_size, state_shape]
+        Returns:
+            actions: Batch of actions with shape [batch_size, num_actions]
+        """
+        # Ensure state has correct shape
+        if len(state.shape) == 2:
+            state = tf.expand_dims(state, axis=-1)
+        
+        # Get action probabilities for entire batch
+        action_probs = self.actor(state)
+        
+        # Sample actions for entire batch
+        actions = tf.random.categorical(tf.math.log(action_probs), 1)
+        actions = tf.squeeze(actions)  # Remove extra dimensions
+        
+        # Convert to one-hot encoding to match expected shape
+        actions = tf.one_hot(actions, depth=self.num_actions)
+        
+        return actions.numpy()
 
 def compute_reward(snr, sinr, interference_level):
     """
@@ -115,8 +131,6 @@ def compute_reward(snr, sinr, interference_level):
         0.1 * (-interference_level)  # Interference reduction
     )
     return reward
-
-# Training function
 
 def compute_interference(channel_state, beamforming_vectors):
     """
@@ -166,7 +180,6 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
     
     return sinr
 
-
 def train_sac(training_data, validation_data, config):
     input_shape = training_data[0].shape[1:]  # Exclude batch size
     num_actions = MIMO_CONFIG["tx_antennas"]  # Beamforming actions correspond to TX antennas
@@ -197,14 +210,14 @@ def train_sac(training_data, validation_data, config):
             batch_channels = training_data[0][start:end]
             batch_snr = training_data[1][start:end]
             
-            # Convert complex values to real parts (remove imaginary part)
-            batch_channels = tf.math.real(batch_channels)
+            #  Ensure batch_channels is properly shaped before getting actions
+            batch_channels = tf.convert_to_tensor(batch_channels, dtype=tf.float32)
 
             # Simulate actions and compute rewards
             actions = np.array([sac.get_action(state) for state in batch_channels])
 
             # Ensure actions have the correct shape (batch_size, num_actions)
-            actions = np.reshape(actions, [-1, num_actions])  # Flatten actions to the correct shape
+            actions = sac.get_action(batch_channels)  # Flatten actions to the correct shape
 
             # Ensure batch size is the same for batch_channels and actions
             if batch_channels.shape[0] != actions.shape[0]:
@@ -213,7 +226,6 @@ def train_sac(training_data, validation_data, config):
             # Inside train_sac function, replace:
             rewards = batch_snr  # Using SNR as reward
 
-            # With:
             # Compute SINR and interference
             sinr_values = compute_sinr(batch_channels, actions)
             interference_levels = compute_interference(batch_channels, actions)
