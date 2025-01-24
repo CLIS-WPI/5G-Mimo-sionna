@@ -75,40 +75,49 @@ class SoftActorCritic:
         return model
 
     def build_critic(self, input_shape, num_actions, lr):
-        inputs = layers.Input(shape=input_shape)
-        actions = layers.Input(shape=(num_actions,))
-        x = layers.Flatten()(inputs)
-        x = layers.Concatenate()([x, actions])
-        x = layers.Dense(128, activation="relu")(x)
-        x = layers.Dense(128, activation="relu")(x)
-        outputs = layers.Dense(1)(x)
-        model = tf.keras.Model([inputs, actions], outputs)
+        # State input branch
+        state_input = layers.Input(shape=input_shape)
+        state_flat = layers.Flatten()(state_input)
+        
+        # Action input branch
+        action_input = layers.Input(shape=(num_actions,))
+        
+        # Combine state and action
+        concat = layers.Concatenate()([state_flat, action_input])
+        
+        # Hidden layers
+        x = layers.Dense(256, activation="relu")(concat)
+        x = layers.Dense(256, activation="relu")(x)
+        
+        # Output Q-value
+        q_value = layers.Dense(1)(x)
+        
+        model = tf.keras.Model([state_input, action_input], q_value)
         model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr))
         return model
 
     def get_action(self, state):
         """
         Get actions for a batch of states
-        Args:
-            state: Batch of states with shape [batch_size, state_dim]
-        Returns:
-            actions: Batch of actions with shape [batch_size, num_actions]
         """
-        # Ensure state has correct shape including batch dimension
-        if len(state.shape) == 4:  # If missing batch dimension
-            state = tf.expand_dims(state, axis=0)  # Add batch dimension
+        # Convert to tensor if not already
+        state = tf.convert_to_tensor(state, dtype=tf.float32)
         
-        # Get action probabilities for entire batch
+        # Add batch dimension if needed
+        if len(state.shape) == 4:
+            state = tf.expand_dims(state, axis=0)
+        
+        # Get action probabilities
         action_probs = self.actor(state)
         
-        # Sample actions for entire batch
-        actions = tf.random.categorical(tf.math.log(action_probs), 1)
-        actions = tf.squeeze(actions)  # Remove extra dimensions
+        # Sample actions using Gumbel-Softmax
+        actions = tf.random.categorical(tf.math.log(action_probs + 1e-10), 1)
+        actions = tf.squeeze(actions)
         
-        # Convert to one-hot encoding to match expected shape
+        # Convert to one-hot encoding
         actions = tf.one_hot(actions, depth=self.num_actions)
         
-        return actions.numpy()
+        return actions
 
 def compute_reward(snr, sinr, interference_level):
     """
@@ -135,28 +144,26 @@ def compute_reward(snr, sinr, interference_level):
 def compute_interference(channel_state, beamforming_vectors):
     """
     Compute interference levels for MIMO transmissions
-    Args:
-        channel_state: Complex channel matrix [batch_size, num_rx, num_rx_ant, num_tx, num_tx_ant]
-        beamforming_vectors: Beamforming vectors [batch_size, num_tx, num_tx_ant]
-    Returns:
-        interference_levels: Interference power levels [batch_size]
     """
     # Convert to complex tensors
     h = tf.cast(channel_state, tf.complex64)
     w = tf.cast(beamforming_vectors, tf.complex64)
     
-    # Reshape tensors similar to compute_sinr
-    h_reshaped = tf.reshape(h, [-1, h.shape[1], h.shape[2], h.shape[4]])
-    w_reshaped = tf.expand_dims(w, axis=-1)
+    # Get batch size
+    batch_size = tf.shape(h)[0]
+    
+    # Reshape tensors
+    h_reshaped = tf.reshape(h, [batch_size, h.shape[1], h.shape[2], h.shape[4]])
+    w_reshaped = tf.reshape(w, [batch_size, -1, 1])  # [batch_size, num_tx_ant, 1]
     
     # Compute interference power
-    interference = tf.zeros(tf.shape(h)[0], dtype=tf.float32)
+    interference = tf.zeros(batch_size, dtype=tf.float32)
     
     # For each receiver
     for i in range(tf.shape(h)[1]):
         desired_signal = tf.abs(tf.matmul(h_reshaped[:, i:i+1, :, :], w_reshaped))**2
         total_power = tf.reduce_sum(desired_signal, axis=1)
-        interference += total_power - desired_signal[:, 0]  # Subtract desired signal power
+        interference += total_power - desired_signal[:, 0]
     
     return interference
 
@@ -165,7 +172,7 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
     Compute SINR for MIMO transmissions
     Args:
         channel_state: Complex channel matrix [batch_size, num_rx, num_rx_ant, num_tx, num_tx_ant]
-        beamforming_vectors: Beamforming vectors [batch_size, num_tx, num_tx_ant]
+        beamforming_vectors: Beamforming vectors [batch_size, num_tx_ant]
         noise_power: Noise power (default: 1.0)
     Returns:
         sinr_values: SINR values [batch_size]
@@ -174,12 +181,14 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
     h = tf.cast(channel_state, tf.complex64)
     w = tf.cast(beamforming_vectors, tf.complex64)
     
-    # Reshape tensors to align dimensions for matmul
-    # Reshape h to [batch_size, num_rx, num_rx_ant, num_tx_ant]
-    h_reshaped = tf.reshape(h, [-1, h.shape[1], h.shape[2], h.shape[4]])
+    # Get batch size
+    batch_size = tf.shape(h)[0]
     
-    # Reshape w to [batch_size, num_tx_ant, 1]
-    w_reshaped = tf.expand_dims(w, axis=-1)
+    # Reshape h to [batch_size, num_rx, num_rx_ant, num_tx_ant]
+    h_reshaped = tf.reshape(h, [batch_size, h.shape[1], h.shape[2], h.shape[4]])
+    
+    # Reshape w to match batch size and add necessary dimensions
+    w_reshaped = tf.reshape(w, [batch_size, -1, 1])  # [batch_size, num_tx_ant, 1]
     
     # Compute desired signal power
     desired_signal = tf.abs(tf.matmul(h_reshaped, w_reshaped))**2
@@ -202,6 +211,15 @@ def train_sac(training_data, validation_data, config):
         'critic_losses': [],
         'actor_losses': []
     }
+    
+    # First add the validate_shapes function definition
+    def validate_shapes(batch_channels, actions):
+        """Validate shapes of inputs"""
+        if len(batch_channels.shape) != 5:
+            raise ValueError(f"Expected batch_channels shape [batch_size, num_rx, num_rx_ant, num_tx, num_tx_ant], got {batch_channels.shape}")
+        if len(actions.shape) != 2:
+            raise ValueError(f"Expected actions shape [batch_size, num_actions], got {actions.shape}")
+
     # Instantiate the SAC model
     sac = SoftActorCritic(
         input_shape=input_shape,
@@ -213,7 +231,6 @@ def train_sac(training_data, validation_data, config):
         }
     )
 
-    # Training loop
     # Training loop
     for episode in range(config["episodes"]):
         print(f"Episode {episode+1}/{config['episodes']}")
@@ -230,30 +247,31 @@ def train_sac(training_data, validation_data, config):
             # Get actions for the entire batch at once
             actions = sac.get_action(batch_channels)  # This will handle the full batch
 
-            # Compute rewards using batch operations
+            # Validate shapes before proceeding
+            validate_shapes(batch_channels, actions)
+            
+            # Compute rewards
             sinr_values = compute_sinr(batch_channels, actions)
             interference_levels = compute_interference(batch_channels, actions)
-            rewards = np.array([compute_reward(snr, sinr, interference) 
-                            for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)])
-
-            # Compute critic losses and actor updates
-            with tf.GradientTape(persistent=True) as tape:
-                # Ensure batch_channels has correct dimensions for critic
-                batch_channels = tf.expand_dims(batch_channels, axis=-1)  # Add the necessary dimension
-
-                # Concatenate the batch_channels (state) with the actions
-                inputs = [batch_channels, actions]
-
-                # Critic loss computation (TD Error)
-                critic1_value = sac.critic1(inputs)
-                critic2_value = sac.critic2(inputs)
-
-                # Use the min between the two critic estimates (Double Q-Learning)
-                critic_loss = tf.reduce_mean(tf.square(rewards - tf.minimum(critic1_value, critic2_value)))
-
-                # Actor loss using the entropy regularized objective
-                actor_prob = sac.actor(batch_channels)
-                actor_loss = -tf.reduce_mean(tf.math.log(actor_prob) * rewards)  # Maximize reward
+            rewards = tf.convert_to_tensor(
+                [compute_reward(snr, sinr, interference) 
+                for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)],
+                dtype=tf.float32
+            )
+            
+            # Critic loss computation
+            critic1_value = sac.critic1([batch_channels, actions])
+            critic2_value = sac.critic2([batch_channels, actions])
+            
+            # Use minimum of critics (Double Q-learning)
+            min_critic = tf.minimum(critic1_value, critic2_value)
+            critic_loss = tf.reduce_mean(tf.square(rewards - tf.squeeze(min_critic)))
+            
+            # Actor loss with entropy regularization
+            actor_probs = sac.actor(batch_channels)
+            log_probs = tf.math.log(actor_probs + 1e-10)
+            entropy = -tf.reduce_sum(actor_probs * log_probs, axis=-1)
+            actor_loss = -tf.reduce_mean(rewards + sac.alpha * entropy)
 
             # Compute gradients for actor and critic models
             critic1_grads = tape.gradient(critic_loss, sac.critic1.trainable_variables)
