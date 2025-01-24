@@ -157,9 +157,10 @@ def compute_interference(channel_state, beamforming_vectors):
     num_tx_ant = tf.shape(h)[4]
     
     # Reshape tensors similarly to compute_sinr
-    h_reshaped = tf.reshape(h, [batch_size, num_rx * num_rx_ant, -1])
-    w_expanded = tf.tile(tf.expand_dims(w, axis=-1), [1, 1, num_tx_ant])
-    w_reshaped = tf.reshape(w_expanded, [batch_size, num_tx * num_tx_ant, 1])
+    h_reshaped = tf.reshape(h, [batch_size, num_rx * num_rx_ant, num_tx * num_tx_ant])
+    w_expanded = tf.expand_dims(w, axis=-1)
+    w_tiled = tf.tile(w_expanded, [1, 1, num_tx_ant // num_rx])
+    w_reshaped = tf.reshape(w_tiled, [batch_size, -1, 1])
     
     # Compute interference power
     interference = tf.zeros(batch_size, dtype=tf.float32)
@@ -198,12 +199,13 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
     print("w shape:", tf.shape(w))
     
     # Reshape h to [batch_size, num_rx * num_rx_ant, num_tx * num_tx_ant]
-    h_reshaped = tf.reshape(h, [batch_size, num_rx * num_rx_ant, -1])
+    h_reshaped = tf.reshape(h, [batch_size, num_rx * num_rx_ant, num_tx * num_tx_ant])
     
-    # Reshape w to [batch_size, num_tx * num_tx_ant, 1]
-    # First expand w to match the number of transmit antennas
-    w_expanded = tf.tile(tf.expand_dims(w, axis=-1), [1, 1, num_tx_ant])
-    w_reshaped = tf.reshape(w_expanded, [batch_size, num_tx * num_tx_ant, 1])
+    # Reshape w to match dimensions for matrix multiplication
+    # First expand w to match dimensions before reshaping
+    w_expanded = tf.expand_dims(w, axis=-1)  # [batch_size, num_rx, 1]
+    w_tiled = tf.tile(w_expanded, [1, 1, num_tx_ant // num_rx])  # Adjust tiling to match dimensions
+    w_reshaped = tf.reshape(w_tiled, [batch_size, -1, 1])  # [batch_size, num_tx_ant, 1]
     
     # Print reshaped dimensions for debugging
     print("h_reshaped shape:", tf.shape(h_reshaped))
