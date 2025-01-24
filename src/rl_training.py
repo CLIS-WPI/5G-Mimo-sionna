@@ -149,19 +149,25 @@ def compute_interference(channel_state, beamforming_vectors):
     h = tf.cast(channel_state, tf.complex64)
     w = tf.cast(beamforming_vectors, tf.complex64)
     
-    # Get batch size
+    # Get dimensions
     batch_size = tf.shape(h)[0]
+    num_rx = tf.shape(h)[1]
+    num_rx_ant = tf.shape(h)[2]
+    num_tx = tf.shape(h)[3]
+    num_tx_ant = tf.shape(h)[4]
     
     # Reshape tensors
-    h_reshaped = tf.reshape(h, [batch_size, h.shape[1], h.shape[2], h.shape[4]])
-    w_reshaped = tf.reshape(w, [batch_size, -1, 1])  # [batch_size, num_tx_ant, 1]
+    h_reshaped = tf.reshape(h, [batch_size, num_rx * num_rx_ant, num_tx * num_tx_ant])
+    w_reshaped = tf.reshape(w, [batch_size, num_tx_ant, 1])
     
     # Compute interference power
     interference = tf.zeros(batch_size, dtype=tf.float32)
     
     # For each receiver
-    for i in range(tf.shape(h)[1]):
-        desired_signal = tf.abs(tf.matmul(h_reshaped[:, i:i+1, :, :], w_reshaped))**2
+    for i in range(num_rx):
+        start_idx = i * num_rx_ant
+        end_idx = (i + 1) * num_rx_ant
+        desired_signal = tf.abs(tf.matmul(h_reshaped[:, start_idx:end_idx, :], w_reshaped))**2
         total_power = tf.reduce_sum(desired_signal, axis=1)
         interference += total_power - desired_signal[:, 0]
     
@@ -181,14 +187,27 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
     h = tf.cast(channel_state, tf.complex64)
     w = tf.cast(beamforming_vectors, tf.complex64)
     
-    # Get batch size
-    batch_size = tf.shape(h)[0]
+    # Get dimensions
+    batch_size = tf.shape(h)[0]  # 256
+    num_rx = tf.shape(h)[1]      # 4
+    num_rx_ant = tf.shape(h)[2]  # 4
+    num_tx = tf.shape(h)[3]      # 14
+    num_tx_ant = tf.shape(h)[4]  # 64
     
-    # Reshape h to [batch_size, num_rx, num_rx_ant, num_tx_ant]
-    h_reshaped = tf.reshape(h, [batch_size, h.shape[1], h.shape[2], h.shape[4]])
+    # Print shapes for debugging
+    print("h shape:", tf.shape(h))  # [256, 4, 4, 14, 64]
+    print("w shape:", tf.shape(w))  # [256, 4]
     
-    # Reshape w to match batch size and add necessary dimensions
-    w_reshaped = tf.reshape(w, [batch_size, -1, 1])  # [batch_size, num_tx_ant, 1]
+    # Reshape h to handle the MIMO structure correctly
+    # We need to preserve the batch dimension and combine the antenna dimensions appropriately
+    h_reshaped = tf.reshape(h, [batch_size, num_rx * num_rx_ant, num_tx * num_tx_ant])
+    
+    # Reshape w to match dimensions for matrix multiplication
+    w_reshaped = tf.reshape(w, [batch_size, num_tx_ant, 1])
+    
+    # Print reshaped dimensions for debugging
+    print("h_reshaped shape:", tf.shape(h_reshaped))
+    print("w_reshaped shape:", tf.shape(w_reshaped))
     
     # Compute desired signal power
     desired_signal = tf.abs(tf.matmul(h_reshaped, w_reshaped))**2
