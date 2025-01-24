@@ -71,10 +71,19 @@ class SoftActorCritic:
 
     def build_actor(self, input_shape, num_actions, lr):
         inputs = layers.Input(shape=input_shape)
-        x = layers.Flatten()(inputs)
+        
+        # Reshape input to combine last two dimensions
+        x = layers.Reshape((-1, input_shape[-2] * input_shape[-1]))(inputs)
+        
+        # Dense layers
+        x = layers.Dense(256, activation="relu")(x)
         x = layers.Dense(128, activation="relu")(x)
-        x = layers.Dense(128, activation="relu")(x)
+        x = layers.Flatten()(x)
+        x = layers.Dense(64, activation="relu")(x)
+        
+        # Output layer
         outputs = layers.Dense(num_actions, activation="softmax")(x)
+        
         model = tf.keras.Model(inputs, outputs)
         model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr))
         return model
@@ -82,17 +91,20 @@ class SoftActorCritic:
     def build_critic(self, input_shape, num_actions, lr):
         # State input branch
         state_input = layers.Input(shape=input_shape)
-        state_flat = layers.Flatten()(state_input)
+        x = layers.Reshape((-1, input_shape[-2] * input_shape[-1]))(state_input)
+        x = layers.Dense(256, activation="relu")(x)
+        x = layers.Dense(128, activation="relu")(x)
+        x = layers.Flatten()(x)
         
         # Action input branch
         action_input = layers.Input(shape=(num_actions,))
         
         # Combine state and action
-        concat = layers.Concatenate()([state_flat, action_input])
+        concat = layers.Concatenate()([x, action_input])
         
-        # Hidden layers
+        # Dense layers
         x = layers.Dense(256, activation="relu")(concat)
-        x = layers.Dense(256, activation="relu")(x)
+        x = layers.Dense(128, activation="relu")(x)
         
         # Output Q-value
         q_value = layers.Dense(1)(x)
@@ -252,11 +264,41 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
 def train_sac(training_data, validation_data, config):
     # Convert complex channel data to magnitude and phase
     def preprocess_channel_data(channel_data):
+        # Convert to complex tensor if not already
+        channel_data = tf.cast(channel_data, tf.complex64)
+        
+        # Calculate magnitude and phase
         magnitude = tf.abs(channel_data)
-        phase = tf.angle(channel_data)
-        return tf.concat([magnitude, phase], axis=-1)
+        phase = tf.math.angle(channel_data)
+        
+        # Get current shape
+        current_shape = tf.shape(magnitude)
+        batch_size = current_shape[0]
+        
+        # Create paddings with consistent types
+        paddings = [[0, 0],  # Batch dimension
+                    [0, 0],  # Users dimension
+                    [0, 0],  # Rx antennas dimension
+                    [0, 0],  # OFDM symbols dimension
+                    [0, 0]]  # Subcarriers dimension
+        
+        # Convert paddings to tensor with explicit dtype
+        paddings = tf.constant(paddings, dtype=tf.int32)
+        
+        # Apply padding to both magnitude and phase
+        magnitude_padded = tf.pad(magnitude, paddings, "CONSTANT")
+        phase_padded = tf.pad(phase, paddings, "CONSTANT")
+        
+        # Stack magnitude and phase along a new axis
+        processed_data = tf.stack([magnitude_padded, phase_padded], axis=-1)
+        
+        # Ensure the shape is correct for the model
+        expected_shape = [None, 4, 4, 14, 64]  # Based on your error message
+        processed_data.set_shape(expected_shape)
+        
+        return processed_data
     
-    # Preprocess training data
+    # Preprocess training and validation data
     training_channels = preprocess_channel_data(training_data[0])
     validation_channels = preprocess_channel_data(validation_data[0])
     
