@@ -47,7 +47,8 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers
 from config import CONFIG, OUTPUT_FILES, MIMO_CONFIG
-
+from tqdm import tqdm
+import numpy as np
 # Load training and validation datasets
 def load_dataset(file_path):
     print(f"Loading dataset from {file_path}...")
@@ -274,76 +275,96 @@ def train_sac(training_data, validation_data, config):
     )
 
     # Training loop
-    for episode in range(config["episodes"]):
-        print(f"Episode {episode+1}/{config['episodes']}")
-
-        # Batch training
-        for start in range(0, len(training_data[0]), config["batch_size"]):
-            end = start + config["batch_size"]
-            batch_channels = training_data[0][start:end]
-            batch_snr = training_data[1][start:end]
+    with tqdm(total=config["episodes"], desc="Training Episodes") as episode_pbar:
+        for episode in range(config["episodes"]):
+            episode_rewards = []
             
-            # Convert to tensor and ensure proper shape with batch dimension
-            batch_channels = tf.convert_to_tensor(batch_channels, dtype=tf.float32)
-            
-            # Use gradient tape for tracking gradients
-            with tf.GradientTape(persistent=True) as tape:
-                # Get actions for the entire batch at once
-                actions = sac.get_action(batch_channels)
+            # Batch training with progress bar
+            total_batches = len(training_data[0]) // config["batch_size"]
+            with tqdm(total=total_batches, desc=f"Episode {episode+1}", leave=False) as batch_pbar:
+                for start in range(0, len(training_data[0]), config["batch_size"]):
+                    end = start + config["batch_size"]
+                    batch_channels = training_data[0][start:end]
+                    batch_snr = training_data[1][start:end]
+                    
+                    # Convert to tensor and ensure proper shape with batch dimension
+                    batch_channels = tf.convert_to_tensor(batch_channels, dtype=tf.float32)
+                    
+                    # Use gradient tape for tracking gradients
+                    with tf.GradientTape(persistent=True) as tape:
+                        # Get actions for the entire batch at once
+                        actions = sac.get_action(batch_channels)
 
-                # Validate shapes before proceeding
-                validate_shapes(batch_channels, actions)
-                
-                # Compute rewards
-                sinr_values = compute_sinr(batch_channels, actions)
-                interference_levels = compute_interference(batch_channels, actions)
-                rewards = tf.convert_to_tensor(
-                    [compute_reward(snr, sinr, interference) 
-                    for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)],
-                    dtype=tf.float32
-                )
-                
-                # Critic loss computation
-                critic1_value = sac.critic1([batch_channels, actions])
-                critic2_value = sac.critic2([batch_channels, actions])
-                
-                # Use minimum of critics (Double Q-learning)
-                min_critic = tf.minimum(critic1_value, critic2_value)
-                critic_loss = tf.reduce_mean(tf.square(rewards - tf.squeeze(min_critic)))
-                
-                # Actor loss with entropy regularization
-                actor_probs = sac.actor(batch_channels)
-                log_probs = tf.math.log(actor_probs + 1e-10)
-                entropy = -tf.reduce_sum(actor_probs * log_probs, axis=-1)
-                actor_loss = -tf.reduce_mean(rewards + sac.alpha * entropy)
+                        # Validate shapes before proceeding
+                        validate_shapes(batch_channels, actions)
+                        
+                        # Compute rewards
+                        sinr_values = compute_sinr(batch_channels, actions)
+                        interference_levels = compute_interference(batch_channels, actions)
+                        rewards = tf.convert_to_tensor(
+                            [compute_reward(snr, sinr, interference) 
+                            for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)],
+                            dtype=tf.float32
+                        )
+                        
+                        # Critic loss computation
+                        critic1_value = sac.critic1([batch_channels, actions])
+                        critic2_value = sac.critic2([batch_channels, actions])
+                        
+                        # Use minimum of critics (Double Q-learning)
+                        min_critic = tf.minimum(critic1_value, critic2_value)
+                        critic_loss = tf.reduce_mean(tf.square(rewards - tf.squeeze(min_critic)))
+                        
+                        # Actor loss with entropy regularization
+                        actor_probs = sac.actor(batch_channels)
+                        log_probs = tf.math.log(actor_probs + 1e-10)
+                        entropy = -tf.reduce_sum(actor_probs * log_probs, axis=-1)
+                        actor_loss = -tf.reduce_mean(rewards + sac.alpha * entropy)
 
-                # Alpha loss computation
-                alpha_loss = -tf.reduce_mean(sac.alpha * tf.stop_gradient(entropy - 1.0))
+                        # Alpha loss computation
+                        alpha_loss = -tf.reduce_mean(sac.alpha * tf.stop_gradient(entropy - 1.0))
 
-            # Compute gradients
-            critic1_grads = tape.gradient(critic_loss, sac.critic1.trainable_variables)
-            critic2_grads = tape.gradient(critic_loss, sac.critic2.trainable_variables)
-            actor_grads = tape.gradient(actor_loss, sac.actor.trainable_variables)
-            alpha_grads = tape.gradient(alpha_loss, [sac.alpha])
+                    # Compute gradients
+                    critic1_grads = tape.gradient(critic_loss, sac.critic1.trainable_variables)
+                    critic2_grads = tape.gradient(critic_loss, sac.critic2.trainable_variables)
+                    actor_grads = tape.gradient(actor_loss, sac.actor.trainable_variables)
+                    alpha_grads = tape.gradient(alpha_loss, [sac.alpha])
 
-            # Apply gradients
-            sac.critic1.optimizer.apply_gradients(zip(critic1_grads, sac.critic1.trainable_variables))
-            sac.critic2.optimizer.apply_gradients(zip(critic2_grads, sac.critic2.trainable_variables))
-            sac.actor.optimizer.apply_gradients(zip(actor_grads, sac.actor.trainable_variables))
-            sac.optimizer_alpha.apply_gradients(zip(alpha_grads, [sac.alpha]))
+                    # Apply gradients
+                    sac.critic1.optimizer.apply_gradients(zip(critic1_grads, sac.critic1.trainable_variables))
+                    sac.critic2.optimizer.apply_gradients(zip(critic2_grads, sac.critic2.trainable_variables))
+                    sac.actor.optimizer.apply_gradients(zip(actor_grads, sac.actor.trainable_variables))
+                    sac.optimizer_alpha.apply_gradients(zip(alpha_grads, [sac.alpha]))
 
-            # Clean up the tape
-            del tape
+                    # Clean up the tape
+                    del tape
 
-            # Track training history
-            training_history['critic_losses'].append(float(critic_loss))
-            training_history['actor_losses'].append(float(actor_loss))
-            training_history['episode_rewards'].append(float(tf.reduce_mean(rewards)))
+                    # Track training history
+                    training_history['critic_losses'].append(float(critic_loss))
+                    training_history['actor_losses'].append(float(actor_loss))
+                    training_history['episode_rewards'].append(float(tf.reduce_mean(rewards)))
+                    episode_rewards.append(float(tf.reduce_mean(rewards)))
 
-        # Validate performance
-        if episode % config["validation_interval"] == 0:
-            print(f"Validating at episode {episode+1}...")
-            validate_model(sac, validation_data)
+                    # Update batch progress bar
+                    batch_pbar.set_postfix({
+                        'critic_loss': f'{float(critic_loss):.3f}',
+                        'actor_loss': f'{float(actor_loss):.3f}',
+                        'reward': f'{float(tf.reduce_mean(rewards)):.3f}'
+                    })
+                    batch_pbar.update(1)
+
+            # Update episode progress bar
+            avg_episode_reward = np.mean(episode_rewards)
+            episode_pbar.set_postfix({
+                'avg_reward': f'{avg_episode_reward:.3f}',
+                'alpha': f'{float(sac.alpha):.3f}'
+            })
+            episode_pbar.update(1)
+
+            # Validate performance
+            if episode % config["validation_interval"] == 0:
+                val_reward = validate_model(sac, validation_data)
+                tqdm.write(f"\nValidation reward at episode {episode+1}: {val_reward:.3f}\n")
 
     print("Training complete.")
 
@@ -351,41 +372,43 @@ def train_sac(training_data, validation_data, config):
 def validate_model(sac, validation_data):
     val_channels, val_snr = validation_data
     total_reward = 0
+    
+    total_batches = len(val_channels) // CONFIG["batch_size"]
+    with tqdm(total=total_batches, desc="Validating", leave=False) as val_pbar:
+        for start in range(0, len(val_channels), CONFIG["batch_size"]):
+            end = start + CONFIG["batch_size"]
+            batch_channels = val_channels[start:end]
+            batch_snr = val_snr[start:end]
 
-    for start in range(0, len(val_channels), CONFIG["batch_size"]):
-        end = start + CONFIG["batch_size"]
-        batch_channels = val_channels[start:end]
-        batch_snr = val_snr[start:end]
+            # Simulate actions and compute rewards
+            actions = np.array([sac.get_action(state) for state in batch_channels])
+            
+            # Compute SINR and interference for validation
+            sinr_values = compute_sinr(batch_channels, actions)
+            interference_levels = compute_interference(batch_channels, actions)
+            
+            # Calculate rewards using the same reward function
+            rewards = np.array([compute_reward(snr, sinr, interference) 
+                            for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)])
+            
+            batch_reward = np.mean(rewards)
+            total_reward += np.sum(rewards)
+            
+            val_pbar.set_postfix({'batch_reward': f'{batch_reward:.3f}'})
+            val_pbar.update(1)
 
-        # Simulate actions and compute rewards
-        actions = np.array([sac.get_action(state) for state in batch_channels])
-        
-        # Compute SINR and interference for validation
-        sinr_values = compute_sinr(batch_channels, actions)
-        interference_levels = compute_interference(batch_channels, actions)
-        
-        # Calculate rewards using the same reward function
-        rewards = np.array([compute_reward(snr, sinr, interference) 
-                        for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)])
-        
-        total_reward += np.sum(rewards)
+        avg_reward = total_reward / len(validation_data[0])
+        return avg_reward
 
-    print(f"Validation reward: {total_reward / len(validation_data[0])}")
+        # Training configuration
+        train_config = {
+            "episodes": CONFIG["number_of_episodes"],
+            "batch_size": CONFIG["mini_batch_size"],
+            "actor_lr": CONFIG["actor_lr"],
+            "critic_lr": CONFIG["critic_lr"],
+            "alpha_lr": CONFIG["alpha_lr"],
+            "validation_interval": 10
+        }
 
-if __name__ == "__main__":
-    # Load datasets
-    training_data = load_dataset(OUTPUT_FILES["training_data"])
-    validation_data = load_dataset(OUTPUT_FILES["validation_data"])
-
-    # Training configuration
-    train_config = {
-        "episodes": CONFIG["number_of_episodes"],
-        "batch_size": CONFIG["mini_batch_size"],
-        "actor_lr": CONFIG["actor_lr"],
-        "critic_lr": CONFIG["critic_lr"],
-        "alpha_lr": CONFIG["alpha_lr"],
-        "validation_interval": 10
-    }
-
-    # Train the SAC model
-    train_sac(training_data, validation_data, train_config)
+        # Train the SAC model
+        train_sac(training_data, validation_data, train_config)
