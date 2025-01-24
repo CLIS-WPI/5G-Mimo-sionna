@@ -46,7 +46,7 @@ CONFIG = {
     "mini_batch_size": 256,  # Mini-batch size for training
     "batch_size": 256,   
     "actor_lr": 1e-4,  # Learning rate for the actor network
-    "critic_lr": 1e-3,  # Learning rate for the critic network
+    "critic_lr": 3e-4,  # Learning rate for the critic network
     "alpha_lr": 1e-4,  # Learning rate for the alpha parameter
     "validation_interval": 10,
     "checkpoint_interval": 10,  # Save checkpoint every 5 episodes

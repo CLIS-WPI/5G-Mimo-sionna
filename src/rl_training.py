@@ -132,30 +132,34 @@ def compute_reward(snr, sinr, interference_level):
         sinr: Signal-to-Interference-plus-Noise Ratio (tensor)
         interference_level: Level of interference (tensor)
     """
-    sinr_target = tf.constant(20.0, dtype=tf.float32)  # Our target SINR of 20 dB
-    sinr_threshold = tf.constant(10.0, dtype=tf.float32)  # Minimum acceptable SINR
+    sinr_target = tf.constant(20.0, dtype=tf.float32)
+    sinr_threshold = tf.constant(10.0, dtype=tf.float32)
 
     # Convert inputs to tensors if they aren't already
     snr = tf.cast(snr, tf.float32)
     sinr = tf.cast(sinr, tf.float32)
     interference_level = tf.cast(interference_level, tf.float32)
 
-    # Compute reward components
-    sinr_reward = 0.6 * (sinr - sinr_target)  # SINR improvement towards target
-    snr_reward = 0.3 * snr  # SNR contribution
-    interference_reward = 0.1 * (-interference_level)  # Interference reduction
+    # Normalize values to reasonable ranges
+    sinr_error = (sinr - sinr_target) / 20.0  # Normalize by 20dB range
+    snr_norm = tf.clip_by_value(snr / 30.0, -1.0, 1.0)  # Normalize and clip SNR
+    interference_norm = tf.clip_by_value(interference_level / -90.0, -1.0, 1.0)
 
-    # Create penalty for below-threshold SINR
+    # Compute reward components with better scaling
+    sinr_reward = 3.0 * tf.exp(-tf.abs(sinr_error))  # Exponential decay for SINR error
+    snr_reward = 2.0 * snr_norm  # Linear reward for SNR
+    interference_reward = 1.0 * (1.0 - tf.abs(interference_norm))  # Penalty for interference
+
+    # Add penalty for below-threshold SINR
     penalty = tf.where(
         sinr < sinr_threshold,
-        tf.constant(-10.0, dtype=tf.float32),
+        tf.constant(-5.0, dtype=tf.float32),
         tf.constant(0.0, dtype=tf.float32)
     )
 
-    # Combine all components
-    reward = sinr_reward + snr_reward + interference_reward + penalty
-
-    return reward
+    # Combine rewards with clipping
+    total_reward = sinr_reward + snr_reward + interference_reward + penalty
+    return tf.clip_by_value(total_reward, -10.0, 10.0)  # Clip final reward
 
 def compute_interference(channel_state, beamforming_vectors):
     """
@@ -246,8 +250,18 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
     return sinr
 
 def train_sac(training_data, validation_data, config):
-    input_shape = training_data[0].shape[1:]  # Exclude batch size
-    num_actions = MIMO_CONFIG["tx_antennas"]  # Beamforming actions correspond to TX antennas
+    # Convert complex channel data to magnitude and phase
+    def preprocess_channel_data(channel_data):
+        magnitude = tf.abs(channel_data)
+        phase = tf.angle(channel_data)
+        return tf.concat([magnitude, phase], axis=-1)
+    
+    # Preprocess training data
+    training_channels = preprocess_channel_data(training_data[0])
+    validation_channels = preprocess_channel_data(validation_data[0])
+    
+    input_shape = training_channels.shape[1:]  # Updated input shape
+    num_actions = MIMO_CONFIG["tx_antennas"]
     # Add at the start of train_sac
     training_history = {
         'episode_rewards': [],
