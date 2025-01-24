@@ -136,8 +136,8 @@ def compute_interference(channel_state, beamforming_vectors):
     """
     Compute interference levels for MIMO transmissions
     Args:
-        channel_state: Complex channel matrix [batch_size, num_rx, num_tx]
-        beamforming_vectors: Beamforming vectors [batch_size, num_tx]
+        channel_state: Complex channel matrix [batch_size, num_rx, num_rx_ant, num_tx, num_tx_ant]
+        beamforming_vectors: Beamforming vectors [batch_size, num_tx, num_tx_ant]
     Returns:
         interference_levels: Interference power levels [batch_size]
     """
@@ -145,10 +145,16 @@ def compute_interference(channel_state, beamforming_vectors):
     h = tf.cast(channel_state, tf.complex64)
     w = tf.cast(beamforming_vectors, tf.complex64)
     
+    # Reshape tensors similar to compute_sinr
+    h_reshaped = tf.reshape(h, [-1, h.shape[1], h.shape[2], h.shape[4]])
+    w_reshaped = tf.expand_dims(w, axis=-1)
+    
     # Compute interference power
     interference = tf.zeros(tf.shape(h)[0], dtype=tf.float32)
-    for i in range(tf.shape(h)[1]):  # For each receiver
-        desired_signal = tf.abs(tf.matmul(h[:, i:i+1, :], tf.expand_dims(w, -1)))**2
+    
+    # For each receiver
+    for i in range(tf.shape(h)[1]):
+        desired_signal = tf.abs(tf.matmul(h_reshaped[:, i:i+1, :, :], w_reshaped))**2
         total_power = tf.reduce_sum(desired_signal, axis=1)
         interference += total_power - desired_signal[:, 0]  # Subtract desired signal power
     
@@ -158,8 +164,8 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
     """
     Compute SINR for MIMO transmissions
     Args:
-        channel_state: Complex channel matrix [batch_size, num_rx, num_tx]
-        beamforming_vectors: Beamforming vectors [batch_size, num_tx]
+        channel_state: Complex channel matrix [batch_size, num_rx, num_rx_ant, num_tx, num_tx_ant]
+        beamforming_vectors: Beamforming vectors [batch_size, num_tx, num_tx_ant]
         noise_power: Noise power (default: 1.0)
     Returns:
         sinr_values: SINR values [batch_size]
@@ -168,8 +174,15 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
     h = tf.cast(channel_state, tf.complex64)
     w = tf.cast(beamforming_vectors, tf.complex64)
     
+    # Reshape tensors to align dimensions for matmul
+    # Reshape h to [batch_size, num_rx, num_rx_ant, num_tx_ant]
+    h_reshaped = tf.reshape(h, [-1, h.shape[1], h.shape[2], h.shape[4]])
+    
+    # Reshape w to [batch_size, num_tx_ant, 1]
+    w_reshaped = tf.expand_dims(w, axis=-1)
+    
     # Compute desired signal power
-    desired_signal = tf.abs(tf.matmul(h, tf.expand_dims(w, -1)))**2
+    desired_signal = tf.abs(tf.matmul(h_reshaped, w_reshaped))**2
     signal_power = tf.reduce_sum(desired_signal, axis=1)
     
     # Compute interference
