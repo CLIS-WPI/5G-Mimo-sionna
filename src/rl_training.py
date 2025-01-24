@@ -156,11 +156,15 @@ def compute_interference(channel_state, beamforming_vectors):
     num_tx = tf.shape(h)[3]
     num_tx_ant = tf.shape(h)[4]
     
-    # Reshape tensors similarly to compute_sinr
-    h_reshaped = tf.reshape(h, [batch_size, num_rx * num_rx_ant, num_tx * num_tx_ant])
+    # Calculate correct dimensions
+    total_tx_elements = num_tx * num_tx_ant
+    elements_per_rx = total_tx_elements // num_rx
+    
+    # Reshape tensors
+    h_reshaped = tf.reshape(h, [batch_size, num_rx * num_rx_ant, total_tx_elements])
     w_expanded = tf.expand_dims(w, axis=-1)
-    w_tiled = tf.tile(w_expanded, [1, 1, num_tx_ant // num_rx])
-    w_reshaped = tf.reshape(w_tiled, [batch_size, -1, 1])
+    w_tiled = tf.tile(w_expanded, [1, 1, elements_per_rx])
+    w_reshaped = tf.reshape(w_tiled, [batch_size, total_tx_elements, 1])
     
     # Compute interference power
     interference = tf.zeros(batch_size, dtype=tf.float32)
@@ -201,15 +205,14 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
     # Reshape h to [batch_size, num_rx * num_rx_ant, num_tx * num_tx_ant]
     h_reshaped = tf.reshape(h, [batch_size, num_rx * num_rx_ant, num_tx * num_tx_ant])
     
-    # Reshape w to match dimensions for matrix multiplication
-    # First expand w to match the number of transmit antennas
-    w_expanded = tf.expand_dims(w, axis=-1)  # [batch_size, num_rx, 1]
-    w_tiled = tf.tile(w_expanded, [1, 1, num_tx_ant])  # [batch_size, num_rx, num_tx_ant]
-    w_reshaped = tf.reshape(w_tiled, [batch_size, num_tx * num_tx_ant, 1])  # [batch_size, num_tx * num_tx_ant, 1]
+    # Calculate the correct number of elements for w_tiled
+    total_tx_elements = num_tx * num_tx_ant
+    elements_per_rx = total_tx_elements // num_rx
     
-    # Print reshaped dimensions for debugging
-    print("h_reshaped shape:", tf.shape(h_reshaped))
-    print("w_reshaped shape:", tf.shape(w_reshaped))
+    # Reshape w to match dimensions for matrix multiplication
+    w_expanded = tf.expand_dims(w, axis=-1)  # [batch_size, num_rx, 1]
+    w_tiled = tf.tile(w_expanded, [1, 1, elements_per_rx])  # [batch_size, num_rx, elements_per_rx]
+    w_reshaped = tf.reshape(w_tiled, [batch_size, total_tx_elements, 1])
     
     # Compute desired signal power
     desired_signal = tf.abs(tf.matmul(h_reshaped, w_reshaped))**2
