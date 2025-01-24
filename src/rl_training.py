@@ -286,54 +286,63 @@ def train_sac(training_data, validation_data, config):
             # Convert to tensor and ensure proper shape with batch dimension
             batch_channels = tf.convert_to_tensor(batch_channels, dtype=tf.float32)
             
-            # Get actions for the entire batch at once
-            actions = sac.get_action(batch_channels)  # This will handle the full batch
+            # Use gradient tape for tracking gradients
+            with tf.GradientTape(persistent=True) as tape:
+                # Get actions for the entire batch at once
+                actions = sac.get_action(batch_channels)
 
-            # Validate shapes before proceeding
-            validate_shapes(batch_channels, actions)
-            
-            # Compute rewards
-            sinr_values = compute_sinr(batch_channels, actions)
-            interference_levels = compute_interference(batch_channels, actions)
-            rewards = tf.convert_to_tensor(
-                [compute_reward(snr, sinr, interference) 
-                for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)],
-                dtype=tf.float32
-            )
-            
-            # Critic loss computation
-            critic1_value = sac.critic1([batch_channels, actions])
-            critic2_value = sac.critic2([batch_channels, actions])
-            
-            # Use minimum of critics (Double Q-learning)
-            min_critic = tf.minimum(critic1_value, critic2_value)
-            critic_loss = tf.reduce_mean(tf.square(rewards - tf.squeeze(min_critic)))
-            
-            # Actor loss with entropy regularization
-            actor_probs = sac.actor(batch_channels)
-            log_probs = tf.math.log(actor_probs + 1e-10)
-            entropy = -tf.reduce_sum(actor_probs * log_probs, axis=-1)
-            actor_loss = -tf.reduce_mean(rewards + sac.alpha * entropy)
+                # Validate shapes before proceeding
+                validate_shapes(batch_channels, actions)
+                
+                # Compute rewards
+                sinr_values = compute_sinr(batch_channels, actions)
+                interference_levels = compute_interference(batch_channels, actions)
+                rewards = tf.convert_to_tensor(
+                    [compute_reward(snr, sinr, interference) 
+                    for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)],
+                    dtype=tf.float32
+                )
+                
+                # Critic loss computation
+                critic1_value = sac.critic1([batch_channels, actions])
+                critic2_value = sac.critic2([batch_channels, actions])
+                
+                # Use minimum of critics (Double Q-learning)
+                min_critic = tf.minimum(critic1_value, critic2_value)
+                critic_loss = tf.reduce_mean(tf.square(rewards - tf.squeeze(min_critic)))
+                
+                # Actor loss with entropy regularization
+                actor_probs = sac.actor(batch_channels)
+                log_probs = tf.math.log(actor_probs + 1e-10)
+                entropy = -tf.reduce_sum(actor_probs * log_probs, axis=-1)
+                actor_loss = -tf.reduce_mean(rewards + sac.alpha * entropy)
 
-            # Compute gradients for actor and critic models
+                # Alpha loss computation
+                alpha_loss = -tf.reduce_mean(sac.alpha * tf.stop_gradient(entropy - 1.0))
+
+            # Compute gradients
             critic1_grads = tape.gradient(critic_loss, sac.critic1.trainable_variables)
             critic2_grads = tape.gradient(critic_loss, sac.critic2.trainable_variables)
             actor_grads = tape.gradient(actor_loss, sac.actor.trainable_variables)
+            alpha_grads = tape.gradient(alpha_loss, [sac.alpha])
 
             # Apply gradients
             sac.critic1.optimizer.apply_gradients(zip(critic1_grads, sac.critic1.trainable_variables))
             sac.critic2.optimizer.apply_gradients(zip(critic2_grads, sac.critic2.trainable_variables))
             sac.actor.optimizer.apply_gradients(zip(actor_grads, sac.actor.trainable_variables))
+            sac.optimizer_alpha.apply_gradients(zip(alpha_grads, [sac.alpha]))
 
-            # Update the alpha parameter
-            alpha_loss = -tf.reduce_mean(sac.alpha * tf.stop_gradient(actor_prob - 1.0))
-            alpha_grad = tape.gradient(alpha_loss, sac.alpha)
-            sac.optimizer_alpha.apply_gradients([(alpha_grad, sac.alpha)])
+            # Clean up the tape
+            del tape
+
+            # Track training history
+            training_history['critic_losses'].append(float(critic_loss))
+            training_history['actor_losses'].append(float(actor_loss))
+            training_history['episode_rewards'].append(float(tf.reduce_mean(rewards)))
 
         # Validate performance
         if episode % config["validation_interval"] == 0:
             print(f"Validating at episode {episode+1}...")
-            # Validation logic (optional based on validation dataset)
             validate_model(sac, validation_data)
 
     print("Training complete.")
