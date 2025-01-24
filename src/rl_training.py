@@ -202,10 +202,10 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
     h_reshaped = tf.reshape(h, [batch_size, num_rx * num_rx_ant, num_tx * num_tx_ant])
     
     # Reshape w to match dimensions for matrix multiplication
-    # First expand w to match dimensions before reshaping
+    # First expand w to match the number of transmit antennas
     w_expanded = tf.expand_dims(w, axis=-1)  # [batch_size, num_rx, 1]
-    w_tiled = tf.tile(w_expanded, [1, 1, num_tx_ant // num_rx])  # Adjust tiling to match dimensions
-    w_reshaped = tf.reshape(w_tiled, [batch_size, -1, 1])  # [batch_size, num_tx_ant, 1]
+    w_tiled = tf.tile(w_expanded, [1, 1, num_tx_ant])  # [batch_size, num_rx, num_tx_ant]
+    w_reshaped = tf.reshape(w_tiled, [batch_size, num_tx * num_tx_ant, 1])  # [batch_size, num_tx * num_tx_ant, 1]
     
     # Print reshaped dimensions for debugging
     print("h_reshaped shape:", tf.shape(h_reshaped))
