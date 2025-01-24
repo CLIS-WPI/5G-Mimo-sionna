@@ -138,40 +138,36 @@ class SoftActorCritic:
 
 def compute_reward(snr, sinr, interference_level):
     """
-    Compute reward based on SINR target and interference
-    Args:
-        snr: Signal-to-Noise Ratio (tensor)
-        sinr: Signal-to-Interference-plus-Noise Ratio (tensor)
-        interference_level: Level of interference (tensor)
+    Compute reward with better scaling and positive baseline
     """
     sinr_target = tf.constant(20.0, dtype=tf.float32)
     sinr_threshold = tf.constant(10.0, dtype=tf.float32)
 
-    # Convert inputs to tensors if they aren't already
+    # Convert inputs to tensors
     snr = tf.cast(snr, tf.float32)
     sinr = tf.cast(sinr, tf.float32)
     interference_level = tf.cast(interference_level, tf.float32)
 
-    # Normalize values to reasonable ranges
-    sinr_error = (sinr - sinr_target) / 20.0  # Normalize by 20dB range
-    snr_norm = tf.clip_by_value(snr / 30.0, -1.0, 1.0)  # Normalize and clip SNR
-    interference_norm = tf.clip_by_value(interference_level / -90.0, -1.0, 1.0)
+    # Normalize values with better scaling
+    sinr_error = tf.clip_by_value((sinr - sinr_target) / 10.0, -2.0, 2.0)
+    snr_norm = tf.clip_by_value(snr / 20.0, -1.0, 1.0)
+    interference_norm = tf.clip_by_value((interference_level + 90.0) / 20.0, -1.0, 1.0)
 
-    # Compute reward components with better scaling
-    sinr_reward = 3.0 * tf.exp(-tf.abs(sinr_error))  # Exponential decay for SINR error
-    snr_reward = 2.0 * snr_norm  # Linear reward for SNR
-    interference_reward = 1.0 * (1.0 - tf.abs(interference_norm))  # Penalty for interference
+    # Compute reward components with positive baseline
+    sinr_reward = 5.0 * (1.0 - tf.abs(sinr_error))  # Max 5.0 when error is 0
+    snr_reward = 3.0 * (snr_norm + 1.0) / 2.0       # Range [0, 3.0]
+    interference_reward = 2.0 * (1.0 - interference_norm)  # Range [0, 2.0]
 
-    # Add penalty for below-threshold SINR
+    # Softer penalty for below-threshold SINR
     penalty = tf.where(
         sinr < sinr_threshold,
-        tf.constant(-5.0, dtype=tf.float32),
+        -2.0 * (sinr_threshold - sinr) / sinr_threshold,  # Gradual penalty
         tf.constant(0.0, dtype=tf.float32)
     )
 
-    # Combine rewards with clipping
+    # Combine rewards with better baseline
     total_reward = sinr_reward + snr_reward + interference_reward + penalty
-    return tf.clip_by_value(total_reward, -10.0, 10.0)  # Clip final reward
+    return tf.clip_by_value(total_reward, -5.0, 10.0)  # Ensure reasonable range
 
 def compute_interference(channel_state, beamforming_vectors):
     """
@@ -264,37 +260,28 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
 def train_sac(training_data, validation_data, config):
     # Convert complex channel data to magnitude and phase
     def preprocess_channel_data(channel_data):
-        # Convert to complex tensor if not already
+        """
+        Preprocess channel data by separating real and imaginary parts
+        Args:
+            channel_data: Input channel realizations [batch_size, num_rx, num_rx_ant, num_tx, num_tx_ant]
+        Returns:
+            Preprocessed channel data with real and imaginary parts concatenated
+        """
+        # Convert to complex tensor
         channel_data = tf.cast(channel_data, tf.complex64)
         
-        # Calculate magnitude and phase
-        magnitude = tf.abs(channel_data)
-        phase = tf.math.angle(channel_data)
+        # Separate real and imaginary parts
+        real_part = tf.math.real(channel_data)
+        imag_part = tf.math.imag(channel_data)
         
-        # Get current shape
-        current_shape = tf.shape(magnitude)
-        batch_size = current_shape[0]
+        # Stack real and imaginary parts along a new axis
+        processed_data = tf.stack([real_part, imag_part], axis=-1)
         
-        # Create paddings with consistent types
-        paddings = [[0, 0],  # Batch dimension
-                    [0, 0],  # Users dimension
-                    [0, 0],  # Rx antennas dimension
-                    [0, 0],  # OFDM symbols dimension
-                    [0, 0]]  # Subcarriers dimension
+        # Convert to float32 for the neural network
+        processed_data = tf.cast(processed_data, tf.float32)
         
-        # Convert paddings to tensor with explicit dtype
-        paddings = tf.constant(paddings, dtype=tf.int32)
-        
-        # Apply padding to both magnitude and phase
-        magnitude_padded = tf.pad(magnitude, paddings, "CONSTANT")
-        phase_padded = tf.pad(phase, paddings, "CONSTANT")
-        
-        # Stack magnitude and phase along a new axis
-        processed_data = tf.stack([magnitude_padded, phase_padded], axis=-1)
-        
-        # Ensure the shape is correct for the model
-        expected_shape = [None, 4, 4, 14, 64]  # Based on your error message
-        processed_data.set_shape(expected_shape)
+        # Ensure the shape matches the expected dimensions
+        processed_data.set_shape([None, 4, 4, 14, 64, 2])  # Added dimension for real/imag parts
         
         return processed_data
     
