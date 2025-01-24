@@ -73,20 +73,15 @@ class SoftActorCritic:
         """
         Build actor network with correct shape handling
         Args:
-            input_shape: Shape of input tensor (4, 4, 14, 64, 2) - includes real/imag parts
+            input_shape: Shape of flattened input tensor
             num_actions: Number of possible actions
             lr: Learning rate
         """
-        inputs = layers.Input(shape=input_shape)
+        # Input layer
+        inputs = layers.Input(shape=(np.prod(input_shape),))  # Flattened input
         
-        # Calculate flattened dimension correctly
-        flat_dim = np.prod(input_shape)  # 4 * 4 * 14 * 64 * 2 = 28672
-        
-        # Reshape and flatten the input
-        x = layers.Reshape((-1,))(inputs)  # Flatten all dimensions
-        
-        # Dense layers with proper sizes
-        x = layers.Dense(1024, activation="relu")(x)
+        # Dense layers
+        x = layers.Dense(1024, activation="relu")(inputs)
         x = layers.Dense(512, activation="relu")(x)
         x = layers.Dense(256, activation="relu")(x)
         
@@ -268,6 +263,20 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
     return sinr
 
 def train_sac(training_data, validation_data, config):
+    # Preprocess data...
+    training_channels = preprocess_channel_data(training_data[0])
+    validation_channels = preprocess_channel_data(validation_data[0])
+    
+    # Initialize training history dictionary
+    training_history = {
+        'episode_rewards': [],
+        'critic_losses': [],
+        'actor_losses': []
+    }
+    
+    # Calculate input shape...
+    input_shape = training_channels.shape[1:]
+
     # Convert complex channel data to magnitude and phase
     def preprocess_channel_data(channel_data):
         """
@@ -290,33 +299,31 @@ def train_sac(training_data, validation_data, config):
         # Convert to float32 for the neural network
         processed_data = tf.cast(processed_data, tf.float32)
         
+        # Reshape to combine all features
+        batch_size = tf.shape(processed_data)[0]
+        feature_dim = np.prod(processed_data.shape[1:])
+        processed_data = tf.reshape(processed_data, [batch_size, -1])
+        
         return processed_data
     
     # Preprocess training and validation data
     training_channels = preprocess_channel_data(training_data[0])
     validation_channels = preprocess_channel_data(validation_data[0])
-    
-    input_shape = training_channels.shape[1:]  # Updated input shape
-    num_actions = MIMO_CONFIG["tx_antennas"]
-    # Add at the start of train_sac
-    training_history = {
-        'episode_rewards': [],
-        'critic_losses': [],
-        'actor_losses': []
-    }
-    
+
+    # Calculate input shape after preprocessing
+    input_shape = training_channels.shape[1:]  # This will be a single dimension now
+
     # First add the validate_shapes function definition
     def validate_shapes(batch_channels, actions):
         """Validate shapes of inputs"""
-        if len(batch_channels.shape) != 5:
-            raise ValueError(f"Expected batch_channels shape [batch_size, num_rx, num_rx_ant, num_tx, num_tx_ant], got {batch_channels.shape}")
+        if len(batch_channels.shape) != 2:  # [batch_size, flattened_features]
+            raise ValueError(f"Expected batch_channels shape [batch_size, flattened_features], got {batch_channels.shape}")
         if len(actions.shape) != 2:
-            raise ValueError(f"Expected actions shape [batch_size, num_actions], got {actions.shape}")
+            raise ValueError(f"Expected actions shape [batch_size, num_actions], got {actions.shape}")ValueError(f"Expected actions shape [batch_size, num_actions], got {actions.shape}")
 
-    # Instantiate the SAC model
     sac = SoftActorCritic(
         input_shape=input_shape,
-        num_actions=num_actions,
+        num_actions=MIMO_CONFIG["tx_antennas"],
         learning_rates={
             "actor": config["actor_lr"],
             "critic": config["critic_lr"],
