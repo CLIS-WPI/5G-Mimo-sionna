@@ -70,22 +70,32 @@ class SoftActorCritic:
         self.optimizer_alpha = tf.keras.optimizers.Adam(learning_rate=learning_rates["alpha"])
 
     def build_actor(self, input_shape, num_actions, lr):
+        """
+        Build actor network with correct shape handling
+        Args:
+            input_shape: Shape of input tensor (4, 4, 14, 64, 2) - includes real/imag parts
+            num_actions: Number of possible actions
+            lr: Learning rate
+        """
         inputs = layers.Input(shape=input_shape)
         
-        # Reshape input to combine last two dimensions
-        x = layers.Reshape((-1, input_shape[-2] * input_shape[-1]))(inputs)
+        # Calculate flattened dimension correctly
+        flat_dim = np.prod(input_shape)  # 4 * 4 * 14 * 64 * 2 = 28672
         
-        # Dense layers
+        # Reshape and flatten the input
+        x = layers.Reshape((-1,))(inputs)  # Flatten all dimensions
+        
+        # Dense layers with proper sizes
+        x = layers.Dense(1024, activation="relu")(x)
+        x = layers.Dense(512, activation="relu")(x)
         x = layers.Dense(256, activation="relu")(x)
-        x = layers.Dense(128, activation="relu")(x)
-        x = layers.Flatten()(x)
-        x = layers.Dense(64, activation="relu")(x)
         
         # Output layer
         outputs = layers.Dense(num_actions, activation="softmax")(x)
         
         model = tf.keras.Model(inputs, outputs)
         model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr))
+        
         return model
 
     def build_critic(self, input_shape, num_actions, lr):
@@ -265,7 +275,7 @@ def train_sac(training_data, validation_data, config):
         Args:
             channel_data: Input channel realizations [batch_size, num_rx, num_rx_ant, num_tx, num_tx_ant]
         Returns:
-            Preprocessed channel data with real and imaginary parts concatenated
+            Preprocessed channel data with real and imaginary parts
         """
         # Convert to complex tensor
         channel_data = tf.cast(channel_data, tf.complex64)
@@ -279,9 +289,6 @@ def train_sac(training_data, validation_data, config):
         
         # Convert to float32 for the neural network
         processed_data = tf.cast(processed_data, tf.float32)
-        
-        # Ensure the shape matches the expected dimensions
-        processed_data.set_shape([None, 4, 4, 14, 64, 2])  # Added dimension for real/imag parts
         
         return processed_data
     
