@@ -400,15 +400,20 @@ def validate_model(sac, validation_data):
         avg_reward = total_reward / len(validation_data[0])
         return avg_reward
 
-        # Training configuration
-        train_config = {
-            "episodes": CONFIG["number_of_episodes"],
-            "batch_size": CONFIG["mini_batch_size"],
-            "actor_lr": CONFIG["actor_lr"],
-            "critic_lr": CONFIG["critic_lr"],
-            "alpha_lr": CONFIG["alpha_lr"],
-            "validation_interval": 10
-        }
+if __name__ == "__main__":
+    # Load datasets
+    training_data = load_dataset(OUTPUT_FILES["training_data"])
+    validation_data = load_dataset(OUTPUT_FILES["validation_data"])
 
-        # Train the SAC model
-        train_sac(training_data, validation_data, train_config)
+    # Training configuration
+    train_config = {
+        "episodes": CONFIG["number_of_episodes"],
+        "batch_size": CONFIG["mini_batch_size"],
+        "actor_lr": CONFIG["actor_lr"],
+        "critic_lr": CONFIG["critic_lr"],
+        "alpha_lr": CONFIG["alpha_lr"],
+        "validation_interval": 10
+    }
+
+    # Train the SAC model
+    train_sac(training_data, validation_data, train_config)
