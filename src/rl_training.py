@@ -123,27 +123,41 @@ def compute_reward(snr, sinr, interference_level):
     """
     Compute reward based on SINR target and interference
     Args:
-        snr: Signal-to-Noise Ratio
-        sinr: Signal-to-Interference-plus-Noise Ratio
-        interference_level: Level of interference
+        snr: Signal-to-Noise Ratio (tensor)
+        sinr: Signal-to-Interference-plus-Noise Ratio (tensor)
+        interference_level: Level of interference (tensor)
     """
-    sinr_target = 20.0  # Our target SINR of 20 dB
-    sinr_threshold = 10.0  # Minimum acceptable SINR
+    sinr_target = tf.constant(20.0, dtype=tf.float32)  # Our target SINR of 20 dB
+    sinr_threshold = tf.constant(10.0, dtype=tf.float32)  # Minimum acceptable SINR
 
-    # Penalize if SINR is below threshold
-    if sinr < sinr_threshold:
-        return -10.0
-    
-    reward = (
-        0.6 * (sinr - sinr_target) +  # SINR improvement towards target
-        0.3 * snr +  # SNR contribution
-        0.1 * (-interference_level)  # Interference reduction
+    # Convert inputs to tensors if they aren't already
+    snr = tf.cast(snr, tf.float32)
+    sinr = tf.cast(sinr, tf.float32)
+    interference_level = tf.cast(interference_level, tf.float32)
+
+    # Compute reward components
+    sinr_reward = 0.6 * (sinr - sinr_target)  # SINR improvement towards target
+    snr_reward = 0.3 * snr  # SNR contribution
+    interference_reward = 0.1 * (-interference_level)  # Interference reduction
+
+    # Create penalty for below-threshold SINR
+    penalty = tf.where(
+        sinr < sinr_threshold,
+        tf.constant(-10.0, dtype=tf.float32),
+        tf.constant(0.0, dtype=tf.float32)
     )
+
+    # Combine all components
+    reward = sinr_reward + snr_reward + interference_reward + penalty
+
     return reward
 
 def compute_interference(channel_state, beamforming_vectors):
     """
     Compute interference levels for MIMO transmissions
+    Args:
+        channel_state: Complex channel matrix [batch_size, num_rx, num_rx_ant, num_tx, num_tx_ant]
+        beamforming_vectors: Beamforming vectors [batch_size, num_rx]
     """
     # Convert to complex tensors
     h = tf.cast(channel_state, tf.complex64)
@@ -166,14 +180,18 @@ def compute_interference(channel_state, beamforming_vectors):
     w_tiled = tf.tile(w_expanded, [1, 1, elements_per_rx])
     w_reshaped = tf.reshape(w_tiled, [batch_size, total_tx_elements, 1])
     
-    # Compute interference power
-    interference = tf.zeros(batch_size, dtype=tf.float32)
+    # Initialize interference tensor
+    interference = tf.zeros([batch_size], dtype=tf.float32)
     
     # For each receiver
     for i in range(num_rx):
+        # Calculate indices for current receiver's antennas
         start_idx = i * num_rx_ant
         end_idx = (i + 1) * num_rx_ant
-        desired_signal = tf.abs(tf.matmul(h_reshaped[:, start_idx:end_idx, :], w_reshaped))**2
+        
+        # Calculate interference for current receiver
+        channel_slice = h_reshaped[:, start_idx:end_idx, :]
+        desired_signal = tf.abs(tf.matmul(channel_slice, w_reshaped))**2
         total_power = tf.reduce_sum(desired_signal, axis=1)
         interference += total_power - desired_signal[:, 0]
     
