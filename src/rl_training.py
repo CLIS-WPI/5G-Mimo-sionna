@@ -56,6 +56,27 @@ from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
 # Load training and validation datasets
+import random
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.buffer = []
+        self.position = 0
+
+    def push(self, state, action, reward, next_state):
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(None)
+        self.buffer[self.position] = (state, action, reward, next_state)
+        self.position = (self.position + 1) % self.capacity
+
+    def sample(self, batch_size):
+        batch = random.sample(self.buffer, batch_size)
+        state, action, reward, next_state = map(np.stack, zip(*batch))
+        return state, action, reward, next_state
+
+    def __len__(self):
+        return len(self.buffer)
+    
 def load_dataset(file_path):
     print(f"Loading dataset from {file_path}...")
     try:
@@ -178,37 +199,33 @@ class SoftActorCritic:
         return actions
 
 def compute_reward(snr, sinr, interference_level):
-    """
-    Compute reward with better scaling and positive baseline
-    """
-    sinr_target = tf.constant(20.0, dtype=tf.float32)
-    sinr_threshold = tf.constant(10.0, dtype=tf.float32)
-
-    # Convert inputs to tensors
+    # Cast all inputs to float32
     snr = tf.cast(snr, tf.float32)
     sinr = tf.cast(sinr, tf.float32)
     interference_level = tf.cast(interference_level, tf.float32)
+    
+    sinr_target = tf.constant(20.0, dtype=tf.float32)
+    sinr_threshold = tf.constant(10.0, dtype=tf.float32)
 
-    # Normalize values with better scaling
-    sinr_error = tf.clip_by_value((sinr - sinr_target) / 10.0, -2.0, 2.0)
-    snr_norm = tf.clip_by_value(snr / 20.0, -1.0, 1.0)
-    interference_norm = tf.clip_by_value((interference_level + 90.0) / 20.0, -1.0, 1.0)
+    # Use softer normalization
+    sinr_error = tf.clip_by_value((sinr - sinr_target) / 20.0, -1.0, 1.0)  # Reduced scaling
+    snr_norm = tf.clip_by_value(snr / 30.0, -1.0, 1.0)  # Increased range
+    interference_norm = tf.clip_by_value((interference_level + 100.0) / 30.0, -1.0, 1.0)  # Adjusted range
 
-    # Compute reward components with positive baseline
-    sinr_reward = 5.0 * (1.0 - tf.abs(sinr_error))  # Max 5.0 when error is 0
-    snr_reward = 3.0 * (snr_norm + 1.0) / 2.0       # Range [0, 3.0]
-    interference_reward = 2.0 * (1.0 - interference_norm)  # Range [0, 2.0]
+    # Softer rewards
+    sinr_reward = tf.cast(3.0, tf.float32) * (1.0 - tf.abs(sinr_error))  # Reduced weight
+    snr_reward = tf.cast(2.0, tf.float32) * (snr_norm + 1.0) / 2.0  # Reduced weight
+    interference_reward = tf.cast(1.0, tf.float32) * (1.0 - interference_norm)  # Reduced weight
 
-    # Softer penalty for below-threshold SINR
+    # Softer penalty
     penalty = tf.where(
         sinr < sinr_threshold,
-        -2.0 * (sinr_threshold - sinr) / sinr_threshold,  # Gradual penalty
+        -1.0 * (sinr_threshold - sinr) / sinr_threshold,  # Reduced penalty
         tf.constant(0.0, dtype=tf.float32)
     )
 
-    # Combine rewards with better baseline
     total_reward = sinr_reward + snr_reward + interference_reward + penalty
-    return tf.clip_by_value(total_reward, -5.0, 10.0)  # Ensure reasonable range
+    return tf.clip_by_value(total_reward, -3.0, 5.0)  # Reduced range
 
 def compute_interference(channel_state, beamforming_vectors):
     """
@@ -311,6 +328,8 @@ def train_sac(training_data, validation_data, config):
         sac: Trained SAC model
         training_history: Dictionary containing training metrics
     """
+    replay_buffer = ReplayBuffer(capacity=100000)
+
     # Initialize training history
     training_history = {
         'episode_rewards': [],
@@ -398,6 +417,12 @@ def train_sac(training_data, validation_data, config):
                             dtype=tf.float32
                         )
                         
+                        replay_buffer.push(batch_channels_flat, actions, rewards, batch_channels_flat)  # Note: in this case next_state is same as current state
+                        
+                        # Sample from replay buffer for training
+                        if len(replay_buffer) > config["batch_size"]:
+                            states, actions, rewards, next_states = replay_buffer.sample(config["batch_size"])
+
                         # Critic loss computation
                         critic1_value = sac.critic1([batch_channels_flat, actions])
                         critic2_value = sac.critic2([batch_channels_flat, actions])
@@ -420,6 +445,11 @@ def train_sac(training_data, validation_data, config):
                     critic2_grads = tape.gradient(critic_loss, sac.critic2.trainable_variables)
                     actor_grads = tape.gradient(actor_loss, sac.actor.trainable_variables)
                     alpha_grads = tape.gradient(alpha_loss, [sac.alpha])
+
+                    # Add the gradient clipping here, before applying gradients
+                    critic1_grads = [tf.clip_by_norm(g, 1.0) for g in critic1_grads]
+                    critic2_grads = [tf.clip_by_norm(g, 1.0) for g in critic2_grads]
+                    actor_grads = [tf.clip_by_norm(g, 1.0) for g in actor_grads]
 
                     # Apply gradients
                     sac.critic1.optimizer.apply_gradients(zip(critic1_grads, sac.critic1.trainable_variables))
@@ -453,12 +483,12 @@ def train_sac(training_data, validation_data, config):
             episode_pbar.update(1)
 
             # Validate performance
+            # In the training loop:
             if episode % config["validation_interval"] == 0:
-                val_reward = validate_model(sac, validation_data)
+                val_reward = validate_model(sac, ((validation_channels_orig, validation_channels_flat), validation_snr))
                 training_history['validation_rewards'].append(float(val_reward))
                 training_history['validation_episodes'].append(episode)
                 tqdm.write(f"\nValidation reward at episode {episode+1}: {val_reward:.3f}\n")
-
             # Save results and visualizations
             if episode % config["save_interval"] == 0:
                 # Create directories for saving results
@@ -520,16 +550,26 @@ def train_sac(training_data, validation_data, config):
 
 # Validation function
 def validate_model(sac, validation_data):
-    val_channels_orig, val_channels_flat = validation_data
+    """
+    Validate model performance
+    Args:
+        sac: Trained SAC model
+        validation_data: Tuple of ((original_channels, flattened_channels), snr)
+    Returns:
+        Average reward across validation set
+    """
+    # Unpack validation data correctly
+    (val_channels_orig, val_channels_flat), val_snr = validation_data
     total_reward = 0
     
     total_batches = len(val_channels_orig) // CONFIG["batch_size"]
     with tqdm(total=total_batches, desc="Validating", leave=False) as val_pbar:
         for start in range(0, len(val_channels_orig), CONFIG["batch_size"]):
             end = start + CONFIG["batch_size"]
+            # Get batch data
             batch_channels_orig = val_channels_orig[start:end]
             batch_channels_flat = val_channels_flat[start:end]
-            batch_snr = validation_data[1][start:end]
+            batch_snr = val_snr[start:end]
 
             # Get actions using flattened data
             actions = sac.get_action(batch_channels_flat)
@@ -548,7 +588,7 @@ def validate_model(sac, validation_data):
             val_pbar.set_postfix({'batch_reward': f'{batch_reward:.3f}'})
             val_pbar.update(1)
 
-        avg_reward = total_reward / len(validation_data[0])
+        avg_reward = total_reward / len(val_channels_orig)
         return avg_reward
 
 if __name__ == "__main__":
