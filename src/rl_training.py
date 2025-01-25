@@ -204,28 +204,29 @@ def compute_reward(snr, sinr, interference_level):
     sinr = tf.cast(sinr, tf.float32)
     interference_level = tf.cast(interference_level, tf.float32)
     
+    # Adjust target and threshold values
     sinr_target = tf.constant(20.0, dtype=tf.float32)
-    sinr_threshold = tf.constant(10.0, dtype=tf.float32)
+    sinr_threshold = tf.constant(5.0, dtype=tf.float32)  # Reduced from 10.0
 
-    # Use softer normalization
-    sinr_error = tf.clip_by_value((sinr - sinr_target) / 20.0, -1.0, 1.0)  # Reduced scaling
-    snr_norm = tf.clip_by_value(snr / 30.0, -1.0, 1.0)  # Increased range
-    interference_norm = tf.clip_by_value((interference_level + 100.0) / 30.0, -1.0, 1.0)  # Adjusted range
+    # Softer normalization with reduced penalties
+    sinr_error = tf.clip_by_value((sinr - sinr_target) / 30.0, -1.0, 1.0)
+    snr_norm = tf.clip_by_value(snr / 40.0, -1.0, 1.0)
+    interference_norm = tf.clip_by_value(interference_level / 50.0, -1.0, 1.0)
 
-    # Softer rewards
-    sinr_reward = tf.cast(3.0, tf.float32) * (1.0 - tf.abs(sinr_error))  # Reduced weight
-    snr_reward = tf.cast(2.0, tf.float32) * (snr_norm + 1.0) / 2.0  # Reduced weight
-    interference_reward = tf.cast(1.0, tf.float32) * (1.0 - interference_norm)  # Reduced weight
+    # Adjusted reward weights
+    sinr_reward = 2.0 * (1.0 - tf.abs(sinr_error))
+    snr_reward = 1.0 * snr_norm
+    interference_reward = 1.0 * (1.0 - interference_norm)
 
     # Softer penalty
     penalty = tf.where(
         sinr < sinr_threshold,
-        -1.0 * (sinr_threshold - sinr) / sinr_threshold,  # Reduced penalty
+        -0.5 * (sinr_threshold - sinr) / sinr_threshold,
         tf.constant(0.0, dtype=tf.float32)
     )
 
     total_reward = sinr_reward + snr_reward + interference_reward + penalty
-    return tf.clip_by_value(total_reward, -3.0, 5.0)  # Reduced range
+    return tf.clip_by_value(total_reward, -2.0, 2.0)  # Reduced range
 
 def compute_interference(channel_state, beamforming_vectors):
     """
@@ -318,17 +319,50 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
 def train_sac(training_data, validation_data, config):
     """
     Train the Soft Actor-Critic model
-    
-    Args:
-        training_data: Tuple of (channel_realizations, snr) for training
-        validation_data: Tuple of (channel_realizations, snr) for validation
-        config: Dictionary containing training configuration parameters
-    
-    Returns:
-        sac: Trained SAC model
-        training_history: Dictionary containing training metrics
     """
+    # Initialize replay buffer
     replay_buffer = ReplayBuffer(capacity=100000)
+
+    # Process training and validation data
+    (training_channels_orig, training_channels_flat), training_snr = training_data 
+    (validation_channels_orig, validation_channels_flat), validation_snr = validation_data
+
+    # Calculate input shape after preprocessing
+    input_shape = training_channels_flat.shape[1:]
+
+    def validate_shapes(batch_channels, actions):
+        """
+        Validate shapes of inputs
+        """
+        if len(batch_channels.shape) != 2:
+            raise ValueError(f"Expected batch_channels shape [batch_size, flattened_features], got {batch_channels.shape}")
+        if len(actions.shape) != 2:
+            raise ValueError(f"Expected actions shape [batch_size, num_actions], got {actions.shape}")
+
+    # Initialize SAC model (only once)
+    sac = SoftActorCritic(
+        input_shape=input_shape,
+        num_actions=MIMO_CONFIG["tx_antennas"],
+        learning_rates={
+            "actor": config["actor_lr"],
+            "critic": config["critic_lr"],
+            "alpha": config["alpha_lr"]
+        }
+    )
+
+    # Add learning rate decay (only once)
+    initial_lr = config["actor_lr"]
+    decay_steps = config["episodes"] // 2
+    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        initial_lr,
+        decay_steps=decay_steps,
+        decay_rate=0.96,
+        staircase=True)
+
+    # Update optimizers to use lr_schedule
+    sac.actor.optimizer.learning_rate = lr_schedule
+    sac.critic1.optimizer.learning_rate = lr_schedule
+    sac.critic2.optimizer.learning_rate = lr_schedule
 
     # Initialize training history
     training_history = {
@@ -338,7 +372,32 @@ def train_sac(training_data, validation_data, config):
         'validation_rewards': [],
         'validation_episodes': []
     }
-    
+
+    # Warmup replay buffer
+    print("Warming up replay buffer...")
+    warmup_episodes = 10
+    for _ in range(warmup_episodes):
+        states = training_channels_flat[:config["batch_size"]]
+        actions = tf.random.uniform((config["batch_size"], sac.num_actions))
+        next_states = states  # In this case, next state is same as current
+        rewards = compute_reward(
+            training_snr[:config["batch_size"]], 
+            compute_sinr(training_channels_orig[:config["batch_size"]], actions),
+            compute_interference(training_channels_orig[:config["batch_size"]], actions)
+        )
+        for s, a, r, ns in zip(states, actions, rewards, next_states):
+            replay_buffer.push(s, a, r, ns)
+
+    # Initialize training history
+    training_history = {
+        'episode_rewards': [],
+        'critic_losses': [],
+        'actor_losses': [],
+        'validation_rewards': [],
+        'validation_episodes': []
+    }
+
+
     # Inside train_sac function, add checkpoint saving:
     def save_checkpoint(sac, history, episode, save_dir):
         checkpoint_dir = os.path.join(save_dir, f"checkpoint_ep_{episode}")
@@ -357,10 +416,6 @@ def train_sac(training_data, validation_data, config):
             json.dump({k: [float(v) for v in vals] for k, vals in history.items()}, f)
             
     
-    # Process training and validation data
-    (training_channels_orig, training_channels_flat), training_snr = training_data 
-    (validation_channels_orig, validation_channels_flat), validation_snr = validation_data
-
     # Calculate input shape after preprocessing
     input_shape = training_channels_flat.shape[1:]
     def validate_shapes(batch_channels, actions):
@@ -375,7 +430,6 @@ def train_sac(training_data, validation_data, config):
         if len(actions.shape) != 2:
             raise ValueError(f"Expected actions shape [batch_size, num_actions], got {actions.shape}")
     
-    # Initialize SAC model
     sac = SoftActorCritic(
         input_shape=input_shape,
         num_actions=MIMO_CONFIG["tx_antennas"],
@@ -385,6 +439,20 @@ def train_sac(training_data, validation_data, config):
             "alpha": config["alpha_lr"]
         }
     )
+
+    # Add learning rate decay
+    initial_lr = config["actor_lr"]
+    decay_steps = config["episodes"] // 2
+    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        initial_lr,
+        decay_steps=decay_steps,
+        decay_rate=0.96,
+        staircase=True)
+
+    # Update optimizers to use lr_schedule
+    sac.actor.optimizer.learning_rate = lr_schedule
+    sac.critic1.optimizer.learning_rate = lr_schedule
+    sac.critic2.optimizer.learning_rate = lr_schedule
 
     # Training loop
     with tqdm(total=config["episodes"], desc="Training Episodes") as episode_pbar:
@@ -439,23 +507,22 @@ def train_sac(training_data, validation_data, config):
 
                         # Alpha loss computation
                         alpha_loss = -tf.reduce_mean(sac.alpha * tf.stop_gradient(entropy - 1.0))
+                        # Compute gradients
+                        critic1_grads = tape.gradient(critic_loss, sac.critic1.trainable_variables)
+                        critic2_grads = tape.gradient(critic_loss, sac.critic2.trainable_variables)
+                        actor_grads = tape.gradient(actor_loss, sac.actor.trainable_variables)
+                        alpha_grads = tape.gradient(alpha_loss, [sac.alpha])
 
-                    # Compute gradients
-                    critic1_grads = tape.gradient(critic_loss, sac.critic1.trainable_variables)
-                    critic2_grads = tape.gradient(critic_loss, sac.critic2.trainable_variables)
-                    actor_grads = tape.gradient(actor_loss, sac.actor.trainable_variables)
-                    alpha_grads = tape.gradient(alpha_loss, [sac.alpha])
+                        # Add gradient clipping
+                        critic1_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in critic1_grads]
+                        critic2_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in critic2_grads]
+                        actor_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in actor_grads]
 
-                    # Add the gradient clipping here, before applying gradients
-                    critic1_grads = [tf.clip_by_norm(g, 1.0) for g in critic1_grads]
-                    critic2_grads = [tf.clip_by_norm(g, 1.0) for g in critic2_grads]
-                    actor_grads = [tf.clip_by_norm(g, 1.0) for g in actor_grads]
-
-                    # Apply gradients
-                    sac.critic1.optimizer.apply_gradients(zip(critic1_grads, sac.critic1.trainable_variables))
-                    sac.critic2.optimizer.apply_gradients(zip(critic2_grads, sac.critic2.trainable_variables))
-                    sac.actor.optimizer.apply_gradients(zip(actor_grads, sac.actor.trainable_variables))
-                    sac.optimizer_alpha.apply_gradients(zip(alpha_grads, [sac.alpha]))
+                        # Apply gradients
+                        sac.critic1.optimizer.apply_gradients(zip(critic1_grads, sac.critic1.trainable_variables))
+                        sac.critic2.optimizer.apply_gradients(zip(critic2_grads, sac.critic2.trainable_variables))
+                        sac.actor.optimizer.apply_gradients(zip(actor_grads, sac.actor.trainable_variables))
+                        sac.optimizer_alpha.apply_gradients(zip(alpha_grads, [sac.alpha]))
 
                     # Clean up the tape
                     del tape

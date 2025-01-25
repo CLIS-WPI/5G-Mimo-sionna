@@ -43,12 +43,12 @@ CONFIG = {
     "test_size": 100320,           
     "noise_floor": -174,  # Noise floor in dBm/Hz
     "number_of_episodes": 100,  # Number of training episodes
-    "mini_batch_size": 128,  # Mini-batch size for training
+    "mini_batch_size": 64,  # Mini-batch size for training
     "batch_size": 256,   
     "actor_lr": 1e-4,  # Learning rate for the actor network
     "critic_lr": 1e-4,  # Learning rate for the critic network
     "alpha_lr": 5e-5,  # Learning rate for the alpha parameter
-    "validation_interval": 10,
+    "validation_interval": 5,
     "checkpoint_interval": 10,  # Save checkpoint every 5 episodes
     "num_users": 4,  # Number of users in the system
     "interference_threshold": -90,  # Interference threshold in dBm
