@@ -155,9 +155,9 @@ class SoftActorCritic:
         self.target_critic1.set_weights(self.critic1.get_weights())
         self.target_critic2.set_weights(self.critic2.get_weights())
         
-        # Temperature parameter
-        self.log_alpha = tf.Variable(np.log(learning_rates["alpha"]), dtype=tf.float32)
-        self.alpha = tf.exp(self.log_alpha)
+        # Temperature parameter - Modified to use tf.Variable properly
+        self.log_alpha = tf.Variable(0.0, dtype=tf.float32, name='log_alpha')
+        self.alpha = tf.Variable(1.0, dtype=tf.float32, trainable=True, name='alpha')
         
         # Optimizers
         self.actor_optimizer = tf.keras.optimizers.Adam(
@@ -806,6 +806,10 @@ def validate_model(sac, validation_data):
 
         avg_reward = total_reward / len(val_channels_orig)
         return avg_reward
+    
+def update_alpha(self, alpha_value):
+    """Update the alpha parameter value"""
+    self.alpha.assign(alpha_value)
 
 if __name__ == "__main__":
     try:
@@ -820,11 +824,11 @@ if __name__ == "__main__":
             "batch_size": 128,  # Smaller batch size for better stability
             "actor_lr": 1e-4,   # Slightly lower learning rate
             "critic_lr": 1e-4,
-            "alpha_lr": 1e-4,
+            "alpha_lr": 3e-4,
             "validation_interval": 5,
             "save_interval": 10,
             "warmup_episodes": 20,  # More warmup episodes
-            "target_entropy": -np.log(1.0/MIMO_CONFIG["tx_antennas"]) * 0.98,  # Target entropy for alpha adaptation
+            "target_entropy": -np.log(1.0/MIMO_CONFIG["tx_antennas"]) * 0.98,
             "gamma": 0.99,  # Discount factor
             "tau": 0.005,  # Soft update coefficient
         }
