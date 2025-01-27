@@ -64,6 +64,17 @@ class ReplayBuffer:
         self.position = 0
 
     def push(self, state, action, reward, next_state):
+        # Add shape validation
+        if len(self.buffer) > 0:
+            if (state.shape != self.buffer[0][0].shape or 
+                action.shape != self.buffer[0][1].shape or
+                not np.isscalar(reward) or  # Ensure reward is a scalar
+                next_state.shape != self.buffer[0][3].shape):
+                raise ValueError(f"Shape mismatch in buffer push: \n"
+                            f"state: {state.shape}, expected: {self.buffer[0][0].shape}\n"
+                            f"action: {action.shape}, expected: {self.buffer[0][1].shape}\n"
+                            f"next_state: {next_state.shape}, expected: {self.buffer[0][3].shape}")
+        
         if len(self.buffer) < self.capacity:
             self.buffer.append(None)
         self.buffer[self.position] = (state, action, reward, next_state)
@@ -71,8 +82,15 @@ class ReplayBuffer:
 
     def sample(self, batch_size):
         batch = random.sample(self.buffer, batch_size)
-        state, action, reward, next_state = map(np.stack, zip(*batch))
-        return state, action, reward, next_state
+        states, actions, rewards, next_states = zip(*batch)
+        
+        # Stack arrays and ensure rewards are reshaped properly
+        return (
+            np.stack(states),
+            np.stack(actions),
+            np.array(rewards, dtype=np.float32),
+            np.stack(next_states)
+        )
 
     def __len__(self):
         return len(self.buffer)
@@ -374,19 +392,32 @@ def train_sac(training_data, validation_data, config):
         'validation_episodes': []
     }
 
+    # In train_sac function, modify the warmup section:
     # Warmup replay buffer
     print("Warming up replay buffer...")
     warmup_episodes = 10
     for _ in range(warmup_episodes):
-        states = training_channels_flat[:config["batch_size"]]
+        # Get a batch of states from training data
+        start_idx = _ * config["batch_size"]
+        end_idx = start_idx + config["batch_size"]
+        
+        # Get batch data
+        batch_channels_orig = training_channels_orig[start_idx:end_idx]
+        batch_channels_flat = training_channels_flat[start_idx:end_idx]
+        batch_snr = training_snr[start_idx:end_idx]
+        
+        # Generate random actions
         actions = tf.random.uniform((config["batch_size"], sac.num_actions))
-        next_states = states  # In this case, next state is same as current
+        
+        # Compute rewards
         rewards = compute_reward(
-            training_snr[:config["batch_size"]], 
-            compute_sinr(training_channels_orig[:config["batch_size"]], actions),
-            compute_interference(training_channels_orig[:config["batch_size"]], actions)
+            batch_snr,
+            compute_sinr(batch_channels_orig, actions),
+            compute_interference(batch_channels_orig, actions)
         )
-        for s, a, r, ns in zip(states, actions, rewards, next_states):
+        
+        # Push to replay buffer
+        for s, a, r, ns in zip(batch_channels_flat, actions, rewards, batch_channels_flat):
             replay_buffer.push(s, a, r, ns)
 
     # Training loop
@@ -489,6 +520,16 @@ def train_sac(training_data, validation_data, config):
                 val_reward = validate_model(sac, ((validation_channels_orig, validation_channels_flat), validation_snr))
                 training_history['validation_rewards'].append(float(val_reward))
                 training_history['validation_episodes'].append(episode)
+                
+                # Add this line to log training progress
+                _log_training_progress(
+                    episode=episode,
+                    avg_reward=avg_episode_reward,
+                    critic_loss=float(critic_loss),
+                    actor_loss=float(actor_loss),
+                    val_reward=val_reward
+                )
+                
                 tqdm.write(f"\nValidation reward at episode {episode+1}: {val_reward:.3f}\n")
 
             # Save results and visualizations
