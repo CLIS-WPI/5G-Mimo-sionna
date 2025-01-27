@@ -249,6 +249,8 @@ class SoftActorCritic:
                             )(x)
         
         model = tf.keras.Model([state_input, action_input], q_value)
+        # Add this line to compile the model with an optimizer
+        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr))
         return model
 
     def update_target_networks(self, tau=0.005):
@@ -261,9 +263,11 @@ class SoftActorCritic:
     def get_action(self, state, training=True):
         """Get actions with optional noise for exploration"""
         state = tf.convert_to_tensor(state, dtype=tf.float32)
-        if len(state.shape) == 1:
+        
+        # Add batch dimension if needed
+        if len(state.shape) == 1 or len(state.shape) == 4:
             state = tf.expand_dims(state, 0)
-            
+                
         action_probs = self.actor(state, training=training)
         
         if training:
@@ -483,7 +487,7 @@ def train_sac(training_data, validation_data, config):
     )
 
     # Update optimizers to use lr_schedule
-    sac.actor_optimizer.learning_rate = lr_schedule
+    sac.actor.optimizer.learning_rate = lr_schedule
     sac.critic1.optimizer.learning_rate = lr_schedule
     sac.critic2.optimizer.learning_rate = lr_schedule
 
@@ -635,7 +639,7 @@ def train_sac(training_data, validation_data, config):
                         sac.critic1.optimizer.apply_gradients(zip(critic1_grads, sac.critic1.trainable_variables))
                         sac.critic2.optimizer.apply_gradients(zip(critic2_grads, sac.critic2.trainable_variables))
                         sac.actor.optimizer.apply_gradients(zip(actor_grads, sac.actor.trainable_variables))
-                        sac.optimizer_alpha.apply_gradients(zip(alpha_grads, [sac.alpha]))
+                        sac.alpha_optimizer.apply_gradients(zip(alpha_grads, [sac.alpha]))
 
                     # Update target networks
                     sac.update_target_networks(config["tau"])
