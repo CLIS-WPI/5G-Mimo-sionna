@@ -1,5 +1,8 @@
 import unittest
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import ks_2samp, ttest_ind
 from src.config import CONFIG, MIMO_CONFIG, CHANNEL_CONFIG, MULTIUSER_CONFIG, RESOURCE_GRID
 
 class TestDatasetGeneration(unittest.TestCase):
@@ -141,6 +144,145 @@ class TestDatasetGeneration(unittest.TestCase):
                     np.all(np.isin(user_assoc, [0, 1])),
                     f"Invalid user association values in {name}"
                 )
+
+    def test_dataset_distributions(self):
+        """Test if training, validation, and test datasets have similar distributions"""
+        # Compare SNR distributions
+        train_snr = self.datasets["training"]["snr"]
+        val_snr = self.datasets["validation"]["snr"]
+        test_snr = self.datasets["test"]["snr"]
+
+        # Kolmogorov-Smirnov test for SNR
+        ks_stat_train_val, p_value_train_val = ks_2samp(train_snr, val_snr)
+        ks_stat_train_test, p_value_train_test = ks_2samp(train_snr, test_snr)
+        
+        print(f"\nKolmogorov-Smirnov Test Results for SNR:")
+        print(f"Training vs. Validation: Statistic={ks_stat_train_val:.4f}, p-value={p_value_train_val:.4f}")
+        print(f"Training vs. Test: Statistic={ks_stat_train_test:.4f}, p-value={p_value_train_test:.4f}")
+
+        # t-Test for SNR
+        t_stat_train_val, p_value_train_val = ttest_ind(train_snr, val_snr)
+        t_stat_train_test, p_value_train_test = ttest_ind(train_snr, test_snr)
+        
+        print(f"\nt-Test Results for SNR:")
+        print(f"Training vs. Validation: Statistic={t_stat_train_val:.4f}, p-value={p_value_train_val:.4f}")
+        print(f"Training vs. Test: Statistic={t_stat_train_test:.4f}, p-value={p_value_train_test:.4f}")
+
+        # Compare SINR distributions
+        train_sinr = self.datasets["training"]["sinr"].flatten()
+        val_sinr = self.datasets["validation"]["sinr"].flatten()
+        test_sinr = self.datasets["test"]["sinr"].flatten()
+
+        # Kolmogorov-Smirnov test for SINR
+        ks_stat_train_val, p_value_train_val = ks_2samp(train_sinr, val_sinr)
+        ks_stat_train_test, p_value_train_test = ks_2samp(train_sinr, test_sinr)
+        
+        print(f"\nKolmogorov-Smirnov Test Results for SINR:")
+        print(f"Training vs. Validation: Statistic={ks_stat_train_val:.4f}, p-value={p_value_train_val:.4f}")
+        print(f"Training vs. Test: Statistic={ks_stat_train_test:.4f}, p-value={p_value_train_test:.4f}")
+
+        # t-Test for SINR
+        t_stat_train_val, p_value_train_val = ttest_ind(train_sinr, val_sinr)
+        t_stat_train_test, p_value_train_test = ttest_ind(train_sinr, test_sinr)
+        
+        print(f"\nt-Test Results for SINR:")
+        print(f"Training vs. Validation: Statistic={t_stat_train_val:.4f}, p-value={p_value_train_val:.4f}")
+        print(f"Training vs. Test: Statistic={t_stat_train_test:.4f}, p-value={p_value_train_test:.4f}")
+
+        # Compare Interference distributions
+        train_interference = self.datasets["training"]["interference"].flatten()
+        val_interference = self.datasets["validation"]["interference"].flatten()
+        test_interference = self.datasets["test"]["interference"].flatten()
+
+        # Kolmogorov-Smirnov test for Interference
+        ks_stat_train_val, p_value_train_val = ks_2samp(train_interference, val_interference)
+        ks_stat_train_test, p_value_train_test = ks_2samp(train_interference, test_interference)
+        
+        print(f"\nKolmogorov-Smirnov Test Results for Interference:")
+        print(f"Training vs. Validation: Statistic={ks_stat_train_val:.4f}, p-value={p_value_train_val:.4f}")
+        print(f"Training vs. Test: Statistic={ks_stat_train_test:.4f}, p-value={p_value_train_test:.4f}")
+
+        # t-Test for Interference
+        t_stat_train_val, p_value_train_val = ttest_ind(train_interference, val_interference)
+        t_stat_train_test, p_value_train_test = ttest_ind(train_interference, test_interference)
+        
+        print(f"\nt-Test Results for Interference:")
+        print(f"Training vs. Validation: Statistic={t_stat_train_val:.4f}, p-value={p_value_train_val:.4f}")
+        print(f"Training vs. Test: Statistic={t_stat_train_test:.4f}, p-value={p_value_train_test:.4f}")
+
+        # Assert that p-values are above a significance threshold (e.g., 0.05)
+        significance_threshold = 0.05
+        self.assertGreater(p_value_train_val, significance_threshold, "Training and validation datasets have significantly different distributions")
+        self.assertGreater(p_value_train_test, significance_threshold, "Training and test datasets have significantly different distributions")
+
+        # Generate and save plots
+        self._generate_plots(train_snr, val_snr, test_snr, train_sinr, val_sinr, test_sinr, train_interference, val_interference, test_interference)
+
+    def _generate_plots(self, train_snr, val_snr, test_snr, train_sinr, val_sinr, test_sinr, train_interference, val_interference, test_interference):
+        """Generate and save distribution and box plots for SNR, SINR, and interference"""
+        # Create output directory for plots
+        import os
+        os.makedirs("./plots", exist_ok=True)
+
+        # Plot SNR distributions
+        plt.figure(figsize=(10, 6))
+        sns.kdeplot(train_snr, label="Training SNR", fill=True)
+        sns.kdeplot(val_snr, label="Validation SNR", fill=True)
+        sns.kdeplot(test_snr, label="Test SNR", fill=True)
+        plt.title("SNR Distributions")
+        plt.xlabel("SNR")
+        plt.ylabel("Density")
+        plt.legend()
+        plt.savefig("./plots/snr_distributions.png")
+        plt.close()
+
+        # Plot SINR distributions
+        plt.figure(figsize=(10, 6))
+        sns.kdeplot(train_sinr, label="Training SINR", fill=True)
+        sns.kdeplot(val_sinr, label="Validation SINR", fill=True)
+        sns.kdeplot(test_sinr, label="Test SINR", fill=True)
+        plt.title("SINR Distributions")
+        plt.xlabel("SINR")
+        plt.ylabel("Density")
+        plt.legend()
+        plt.savefig("./plots/sinr_distributions.png")
+        plt.close()
+
+        # Plot Interference distributions
+        plt.figure(figsize=(10, 6))
+        sns.kdeplot(train_interference, label="Training Interference", fill=True)
+        sns.kdeplot(val_interference, label="Validation Interference", fill=True)
+        sns.kdeplot(test_interference, label="Test Interference", fill=True)
+        plt.title("Interference Distributions")
+        plt.xlabel("Interference")
+        plt.ylabel("Density")
+        plt.legend()
+        plt.savefig("./plots/interference_distributions.png")
+        plt.close()
+
+        # Plot SNR boxplots
+        plt.figure(figsize=(10, 6))
+        sns.boxplot(data=[train_snr, val_snr, test_snr], notch=True)
+        plt.xticks([0, 1, 2], ["Training", "Validation", "Test"])
+        plt.title("SNR Boxplot")
+        plt.savefig("./plots/snr_boxplot.png")
+        plt.close()
+
+        # Plot SINR boxplots
+        plt.figure(figsize=(10, 6))
+        sns.boxplot(data=[train_sinr, val_sinr, test_sinr], notch=True)
+        plt.xticks([0, 1, 2], ["Training", "Validation", "Test"])
+        plt.title("SINR Boxplot")
+        plt.savefig("./plots/sinr_boxplot.png")
+        plt.close()
+
+        # Plot Interference boxplots
+        plt.figure(figsize=(10, 6))
+        sns.boxplot(data=[train_interference, val_interference, test_interference], notch=True)
+        plt.xticks([0, 1, 2], ["Training", "Validation", "Test"])
+        plt.title("Interference Boxplot")
+        plt.savefig("./plots/interference_boxplot.png")
+        plt.close()
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
