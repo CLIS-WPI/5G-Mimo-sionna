@@ -318,7 +318,7 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
 
 def train_sac(training_data, validation_data, config):
     """
-    Train the Soft Actor-Critic model
+    Train the Soft Actor-Critic model with logging and notifications.
     """
     # Initialize replay buffer
     replay_buffer = ReplayBuffer(capacity=100000)
@@ -332,14 +332,14 @@ def train_sac(training_data, validation_data, config):
 
     def validate_shapes(batch_channels, actions):
         """
-        Validate shapes of inputs
+        Validate shapes of inputs.
         """
         if len(batch_channels.shape) != 2:
             raise ValueError(f"Expected batch_channels shape [batch_size, flattened_features], got {batch_channels.shape}")
         if len(actions.shape) != 2:
             raise ValueError(f"Expected actions shape [batch_size, num_actions], got {actions.shape}")
 
-    # Initialize SAC model (only once)
+    # Initialize SAC model
     sac = SoftActorCritic(
         input_shape=input_shape,
         num_actions=MIMO_CONFIG["tx_antennas"],
@@ -350,14 +350,15 @@ def train_sac(training_data, validation_data, config):
         }
     )
 
-    # Add learning rate decay (only once)
+    # Add learning rate decay
     initial_lr = config["actor_lr"]
     decay_steps = config["episodes"] // 2
     lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
         initial_lr,
         decay_steps=decay_steps,
         decay_rate=0.96,
-        staircase=True)
+        staircase=True
+    )
 
     # Update optimizers to use lr_schedule
     sac.actor.optimizer.learning_rate = lr_schedule
@@ -388,72 +389,6 @@ def train_sac(training_data, validation_data, config):
         for s, a, r, ns in zip(states, actions, rewards, next_states):
             replay_buffer.push(s, a, r, ns)
 
-    # Initialize training history
-    training_history = {
-        'episode_rewards': [],
-        'critic_losses': [],
-        'actor_losses': [],
-        'validation_rewards': [],
-        'validation_episodes': []
-    }
-
-
-    # Inside train_sac function, add checkpoint saving:
-    def save_checkpoint(sac, history, episode, save_dir):
-        checkpoint_dir = os.path.join(save_dir, f"checkpoint_ep_{episode}")
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        
-        # Save models
-        sac.actor.save(os.path.join(checkpoint_dir, "actor"))
-        sac.critic1.save(os.path.join(checkpoint_dir, "critic1"))
-        sac.critic2.save(os.path.join(checkpoint_dir, "critic2"))
-        
-        # Save alpha
-        np.save(os.path.join(checkpoint_dir, "alpha.npy"), sac.alpha.numpy())
-        
-        # Save history
-        with open(os.path.join(checkpoint_dir, "history.json"), "w") as f:
-            json.dump({k: [float(v) for v in vals] for k, vals in history.items()}, f)
-            
-    
-    # Calculate input shape after preprocessing
-    input_shape = training_channels_flat.shape[1:]
-    def validate_shapes(batch_channels, actions):
-        """
-        Validate shapes of inputs
-        Args:
-            batch_channels: Preprocessed channel data
-            actions: Action vectors from the actor network
-        """
-        if len(batch_channels.shape) != 2:
-            raise ValueError(f"Expected batch_channels shape [batch_size, flattened_features], got {batch_channels.shape}")
-        if len(actions.shape) != 2:
-            raise ValueError(f"Expected actions shape [batch_size, num_actions], got {actions.shape}")
-    
-    sac = SoftActorCritic(
-        input_shape=input_shape,
-        num_actions=MIMO_CONFIG["tx_antennas"],
-        learning_rates={
-            "actor": config["actor_lr"],
-            "critic": config["critic_lr"],
-            "alpha": config["alpha_lr"]
-        }
-    )
-
-    # Add learning rate decay
-    initial_lr = config["actor_lr"]
-    decay_steps = config["episodes"] // 2
-    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_lr,
-        decay_steps=decay_steps,
-        decay_rate=0.96,
-        staircase=True)
-
-    # Update optimizers to use lr_schedule
-    sac.actor.optimizer.learning_rate = lr_schedule
-    sac.critic1.optimizer.learning_rate = lr_schedule
-    sac.critic2.optimizer.learning_rate = lr_schedule
-
     # Training loop
     with tqdm(total=config["episodes"], desc="Training Episodes") as episode_pbar:
         for episode in range(config["episodes"]):
@@ -462,7 +397,6 @@ def train_sac(training_data, validation_data, config):
             # Batch training with progress bar
             total_batches = len(training_data[0]) // config["batch_size"]
             with tqdm(total=total_batches, desc=f"Episode {episode+1}", leave=False) as batch_pbar:
-                # In the training loop, modify the batch processing:
                 for start in range(0, len(training_data[0]), config["batch_size"]):
                     end = start + config["batch_size"]
                     batch_channels_orig = training_channels_orig[start:end]  # Original structure for SINR
@@ -507,6 +441,7 @@ def train_sac(training_data, validation_data, config):
 
                         # Alpha loss computation
                         alpha_loss = -tf.reduce_mean(sac.alpha * tf.stop_gradient(entropy - 1.0))
+
                         # Compute gradients
                         critic1_grads = tape.gradient(critic_loss, sac.critic1.trainable_variables)
                         critic2_grads = tape.gradient(critic_loss, sac.critic2.trainable_variables)
@@ -550,70 +485,92 @@ def train_sac(training_data, validation_data, config):
             episode_pbar.update(1)
 
             # Validate performance
-            # In the training loop:
             if episode % config["validation_interval"] == 0:
                 val_reward = validate_model(sac, ((validation_channels_orig, validation_channels_flat), validation_snr))
                 training_history['validation_rewards'].append(float(val_reward))
                 training_history['validation_episodes'].append(episode)
                 tqdm.write(f"\nValidation reward at episode {episode+1}: {val_reward:.3f}\n")
+
+                # Log key metrics
+                self._log_training_progress(episode, avg_episode_reward, critic_loss, actor_loss, val_reward)
+
             # Save results and visualizations
             if episode % config["save_interval"] == 0:
-                # Create directories for saving results
-                results_dir = "./results"
-                metrics_dir = os.path.join(results_dir, "performance_metrics")
-                viz_dir = os.path.join(results_dir, "visualizations")
-                model_dir = os.path.join(results_dir, "models")
-                
-                for directory in [metrics_dir, viz_dir, model_dir]:
-                    if not os.path.exists(directory):
-                        os.makedirs(directory)
-                
-                # Save performance metrics
-                metrics = {
-                    'episode_rewards': training_history['episode_rewards'],
-                    'critic_losses': training_history['critic_losses'],
-                    'actor_losses': training_history['actor_losses']
-                }
-                np.save(f"{metrics_dir}/training_metrics.npy", metrics)
-                
-                # Save training plots
-                plt.figure(figsize=(10, 6))
-                plt.plot(training_history['episode_rewards'])
-                plt.title('Episode Rewards')
-                plt.xlabel('Step')
-                plt.ylabel('Reward')
-                plt.savefig(f"{viz_dir}/rewards_plot.png")
-                plt.close()
-                
-                plt.figure(figsize=(10, 6))
-                plt.plot(training_history['critic_losses'])
-                plt.title('Critic Losses')
-                plt.xlabel('Step')
-                plt.ylabel('Loss')
-                plt.savefig(f"{viz_dir}/critic_losses_plot.png")
-                plt.close()
-                
-                plt.figure(figsize=(10, 6))
-                plt.plot(training_history['actor_losses'])
-                plt.title('Actor Losses')
-                plt.xlabel('Step')
-                plt.ylabel('Loss')
-                plt.savefig(f"{viz_dir}/actor_losses_plot.png")
-                plt.close()
-
-                # Save models
-                sac.actor.save(os.path.join(model_dir, "actor_model"))
-                sac.critic1.save(os.path.join(model_dir, "critic1_model"))
-                sac.critic2.save(os.path.join(model_dir, "critic2_model"))
-                np.save(os.path.join(model_dir, "alpha.npy"), sac.alpha.numpy())
+                self._save_results(sac, training_history, episode)
 
     print("Training complete.")
     print(f"\nResults saved in:")
-    print(f"Performance metrics: {metrics_dir}")
-    print(f"Visualizations: {viz_dir}")
-    print(f"Models: {model_dir}")
+    print(f"Performance metrics: ./results/performance_metrics")
+    print(f"Visualizations: ./results/visualizations")
+    print(f"Models: ./results/models")
     
     return sac, training_history
+
+def _log_training_progress(self, episode, avg_reward, critic_loss, actor_loss, val_reward):
+    """
+    Log training progress and key metrics.
+    """
+    log_message = (
+        f"Episode {episode + 1}:\n"
+        f"  Average Reward: {avg_reward:.3f}\n"
+        f"  Critic Loss: {critic_loss:.3f}\n"
+        f"  Actor Loss: {actor_loss:.3f}\n"
+        f"  Validation Reward: {val_reward:.3f}\n"
+    )
+    print(log_message)
+
+def _save_results(self, sac, history, episode):
+    """
+    Save training results, models, and visualizations.
+    """
+    # Create directories for saving results
+    results_dir = "./results"
+    metrics_dir = os.path.join(results_dir, "performance_metrics")
+    viz_dir = os.path.join(results_dir, "visualizations")
+    model_dir = os.path.join(results_dir, "models")
+    
+    for directory in [metrics_dir, viz_dir, model_dir]:
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+    
+    # Save performance metrics
+    metrics = {
+        'episode_rewards': history['episode_rewards'],
+        'critic_losses': history['critic_losses'],
+        'actor_losses': history['actor_losses']
+    }
+    np.save(f"{metrics_dir}/training_metrics.npy", metrics)
+    
+    # Save training plots
+    plt.figure(figsize=(10, 6))
+    plt.plot(history['episode_rewards'])
+    plt.title('Episode Rewards')
+    plt.xlabel('Step')
+    plt.ylabel('Reward')
+    plt.savefig(f"{viz_dir}/rewards_plot.png")
+    plt.close()
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(history['critic_losses'])
+    plt.title('Critic Losses')
+    plt.xlabel('Step')
+    plt.ylabel('Loss')
+    plt.savefig(f"{viz_dir}/critic_losses_plot.png")
+    plt.close()
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(history['actor_losses'])
+    plt.title('Actor Losses')
+    plt.xlabel('Step')
+    plt.ylabel('Loss')
+    plt.savefig(f"{viz_dir}/actor_losses_plot.png")
+    plt.close()
+
+    # Save models
+    sac.actor.save(os.path.join(model_dir, "actor_model"))
+    sac.critic1.save(os.path.join(model_dir, "critic1_model"))
+    sac.critic2.save(os.path.join(model_dir, "critic2_model"))
+    np.save(os.path.join(model_dir, "alpha.npy"), sac.alpha.numpy())
 
 # Validation function
 def validate_model(sac, validation_data):
