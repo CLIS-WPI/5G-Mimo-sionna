@@ -216,6 +216,7 @@ class SoftActorCritic:
         outputs = layers.Activation('softmax')(outputs + noise)
         
         model = tf.keras.Model(inputs, outputs)
+        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr))
         return model
 
     def build_critic(self, input_shape, num_actions, lr):
@@ -482,7 +483,7 @@ def train_sac(training_data, validation_data, config):
     )
 
     # Update optimizers to use lr_schedule
-    sac.actor.optimizer.learning_rate = lr_schedule
+    sac.actor_optimizer.learning_rate = lr_schedule
     sac.critic1.optimizer.learning_rate = lr_schedule
     sac.critic2.optimizer.learning_rate = lr_schedule
 
@@ -546,75 +547,86 @@ def train_sac(training_data, validation_data, config):
                     batch_channels_flat = training_channels_flat[start:end]  # Flattened for NN
                     batch_snr = training_data[1][start:end]
                     
-                    # In train_sac function, modify the reward computation and buffer push section:
-
-                    # Inside the training loop where rewards are computed:
                     with tf.GradientTape(persistent=True) as tape:
-                        # Get actions using flattened data
-                        actions = sac.get_action(batch_channels_flat)
-
-                        # Validate shapes before proceeding
-                        validate_shapes(batch_channels_flat, actions)
+                        # Get current actions and their probabilities
+                        current_actions = sac.get_action(batch_channels_flat)
+                        current_action_probs = sac.actor(batch_channels_flat)
+                        current_log_probs = tf.math.log(current_action_probs + 1e-10)
                         
-                        # Compute rewards using original structure
-                        sinr_values = compute_sinr(batch_channels_orig, actions)
-                        interference_levels = compute_interference(batch_channels_orig, actions)
+                        # Validate shapes
+                        validate_shapes(batch_channels_flat, current_actions)
+                        
+                        # Compute immediate rewards using original structure
+                        sinr_values = compute_sinr(batch_channels_orig, current_actions)
+                        interference_levels = compute_interference(batch_channels_orig, current_actions)
                         
                         # Compute rewards for each sample individually
                         rewards = []
                         for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels):
                             reward = compute_reward(snr, sinr, interference)
-                            # Ensure reward is scalar by taking mean if necessary
                             if isinstance(reward, tf.Tensor):
                                 reward = tf.reduce_mean(reward)
                             rewards.append(float(reward))
                         
-                        # Convert rewards list to tensor
+                        # Convert rewards to tensor
                         rewards = tf.convert_to_tensor(rewards, dtype=tf.float32)
                         
-                        # Convert tensors to numpy arrays
+                        # Get next state actions and probabilities for target computation
+                        next_actions = sac.get_action(batch_channels_flat)
+                        next_action_probs = sac.actor(batch_channels_flat)
+                        next_log_probs = tf.math.log(next_action_probs + 1e-10)
+                        
+                        # Compute current Q-values
+                        current_q1 = sac.critic1([batch_channels_flat, current_actions])
+                        current_q2 = sac.critic2([batch_channels_flat, current_actions])
+                        
+                        # Compute target Q-values using target networks
+                        target_q1 = sac.target_critic1([batch_channels_flat, next_actions])
+                        target_q2 = sac.target_critic2([batch_channels_flat, next_actions])
+                        
+                        # Use minimum Q-value for targets (Double Q-learning)
+                        min_target_q = tf.minimum(target_q1, target_q2)
+                        
+                        # Compute entropy term
+                        entropy = -tf.reduce_sum(current_action_probs * current_log_probs, axis=-1, keepdims=True)
+                        
+                        # Compute target value with entropy regularization
+                        target_value = rewards[:, tf.newaxis] + config["gamma"] * (min_target_q - sac.alpha * next_log_probs)
+                        
+                        # Compute critic losses
+                        critic1_loss = tf.reduce_mean(tf.square(target_value - current_q1))
+                        critic2_loss = tf.reduce_mean(tf.square(target_value - current_q2))
+                        critic_loss = critic1_loss + critic2_loss
+                        
+                        # Compute actor loss with entropy regularization
+                        q_values = tf.minimum(current_q1, current_q2)
+                        actor_loss = tf.reduce_mean(sac.alpha * current_log_probs - q_values)
+                        
+                        # Compute temperature (alpha) loss
+                        alpha_loss = -tf.reduce_mean(
+                            sac.alpha * tf.stop_gradient(entropy + config["target_entropy"])
+                        )
+
+                        # Store experience in replay buffer
                         batch_channels_flat_np = batch_channels_flat.numpy()
-                        actions_np = actions.numpy()
+                        current_actions_np = current_actions.numpy()
                         rewards_np = rewards.numpy()
-
-                        # Process each sample in the batch individually
+                        
                         for i in range(config["batch_size"]):
-                            s = batch_channels_flat_np[i]  # Single state
-                            a = actions_np[i]              # Single action
-                            r = float(rewards_np[i])       # Single reward (now scalar)
-                            ns = batch_channels_flat_np[i] # Single next state
-                            
-                            # Push to replay buffer
-                            replay_buffer.push(s, a, r, ns)
+                            replay_buffer.push(
+                                batch_channels_flat_np[i],
+                                current_actions_np[i],
+                                float(rewards_np[i]),
+                                batch_channels_flat_np[i]
+                            )
 
-                        # Sample from replay buffer for training
-                        if len(replay_buffer) > config["batch_size"]:
-                            states, actions, rewards, next_states = replay_buffer.sample(config["batch_size"])
-
-                        # Critic loss computation
-                        critic1_value = sac.critic1([batch_channels_flat, actions])
-                        critic2_value = sac.critic2([batch_channels_flat, actions])
-                        
-                        # Use minimum of critics (Double Q-learning)
-                        min_critic = tf.minimum(critic1_value, critic2_value)
-                        critic_loss = tf.reduce_mean(tf.square(rewards - tf.squeeze(min_critic)))
-                        
-                        # Actor loss with entropy regularization
-                        actor_probs = sac.actor(batch_channels_flat)
-                        log_probs = tf.math.log(actor_probs + 1e-10)
-                        entropy = -tf.reduce_sum(actor_probs * log_probs, axis=-1)
-                        actor_loss = -tf.reduce_mean(rewards + sac.alpha * entropy)
-
-                        # Alpha loss computation
-                        alpha_loss = -tf.reduce_mean(sac.alpha * tf.stop_gradient(entropy - 1.0))
-
-                        # Compute gradients
+                        # Compute and clip gradients
                         critic1_grads = tape.gradient(critic_loss, sac.critic1.trainable_variables)
                         critic2_grads = tape.gradient(critic_loss, sac.critic2.trainable_variables)
                         actor_grads = tape.gradient(actor_loss, sac.actor.trainable_variables)
                         alpha_grads = tape.gradient(alpha_loss, [sac.alpha])
 
-                        # Add gradient clipping
+                        # Clip gradients
                         critic1_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in critic1_grads]
                         critic2_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in critic2_grads]
                         actor_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in actor_grads]
@@ -624,6 +636,9 @@ def train_sac(training_data, validation_data, config):
                         sac.critic2.optimizer.apply_gradients(zip(critic2_grads, sac.critic2.trainable_variables))
                         sac.actor.optimizer.apply_gradients(zip(actor_grads, sac.actor.trainable_variables))
                         sac.optimizer_alpha.apply_gradients(zip(alpha_grads, [sac.alpha]))
+
+                    # Update target networks
+                    sac.update_target_networks(config["tau"])
 
                     # Clean up the tape
                     del tape
