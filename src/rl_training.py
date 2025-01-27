@@ -392,6 +392,7 @@ def train_sac(training_data, validation_data, config):
         'validation_episodes': []
     }
 
+    # In train_sac function, modify the warmup section:
     print("Warming up replay buffer...")
     warmup_episodes = 10
     for _ in range(warmup_episodes):
@@ -409,18 +410,19 @@ def train_sac(training_data, validation_data, config):
         actions = tf.nn.softmax(actions, axis=-1)  # Normalize actions
         
         # Compute rewards
-        rewards = compute_reward(
-            batch_snr,
-            compute_sinr(batch_channels_orig, actions),
-            compute_interference(batch_channels_orig, actions)
-        )
+        sinr_values = compute_sinr(batch_channels_orig, actions)
+        interference_levels = compute_interference(batch_channels_orig, actions)
+        rewards = compute_reward(batch_snr, sinr_values, interference_levels)
+        
+        # Convert rewards to numpy array
+        rewards = rewards.numpy()
         
         # Process each sample individually with correct shapes
         for i in range(config["batch_size"]):
-            s = batch_channels_flat[i]  # Single state
-            a = actions[i]              # Single action
-            r = float(rewards[i])       # Single reward as scalar
-            ns = batch_channels_flat[i] # Single next state
+            s = batch_channels_flat[i].numpy()  # Single state
+            a = actions[i].numpy()              # Single action
+            r = float(rewards[i])               # Convert single reward to scalar
+            ns = batch_channels_flat[i].numpy() # Single next state
             
             # Ensure shapes are correct before pushing
             s = np.array(s, dtype=np.float32)
