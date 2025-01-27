@@ -392,8 +392,6 @@ def train_sac(training_data, validation_data, config):
         'validation_episodes': []
     }
 
-    # In train_sac function, modify the warmup section:
-    # Warmup replay buffer
     print("Warming up replay buffer...")
     warmup_episodes = 10
     for _ in range(warmup_episodes):
@@ -406,8 +404,9 @@ def train_sac(training_data, validation_data, config):
         batch_channels_flat = training_channels_flat[start_idx:end_idx]
         batch_snr = training_snr[start_idx:end_idx]
         
-        # Generate random actions
-        actions = tf.random.uniform((config["batch_size"], sac.num_actions))
+        # Generate random actions with correct shape
+        actions = tf.random.uniform((config["batch_size"], MIMO_CONFIG["tx_antennas"]))
+        actions = tf.nn.softmax(actions, axis=-1)  # Normalize actions
         
         # Compute rewards
         rewards = compute_reward(
@@ -416,8 +415,18 @@ def train_sac(training_data, validation_data, config):
             compute_interference(batch_channels_orig, actions)
         )
         
-        # Push to replay buffer
-        for s, a, r, ns in zip(batch_channels_flat, actions, rewards, batch_channels_flat):
+        # Process each sample individually with correct shapes
+        for i in range(config["batch_size"]):
+            s = batch_channels_flat[i]  # Single state
+            a = actions[i]              # Single action
+            r = float(rewards[i])       # Single reward as scalar
+            ns = batch_channels_flat[i] # Single next state
+            
+            # Ensure shapes are correct before pushing
+            s = np.array(s, dtype=np.float32)
+            a = np.array(a, dtype=np.float32)
+            ns = np.array(ns, dtype=np.float32)
+            
             replay_buffer.push(s, a, r, ns)
 
     # Training loop
