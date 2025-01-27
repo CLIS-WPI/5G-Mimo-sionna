@@ -140,58 +140,156 @@ def preprocess_channel_data(channel_data):
 class SoftActorCritic:
     def __init__(self, input_shape, num_actions, learning_rates):
         self.num_actions = num_actions
+        self.target_entropy = -np.log(1.0/num_actions) * 0.98
+        
+        # Main networks
         self.actor = self.build_actor(input_shape, num_actions, learning_rates["actor"])
         self.critic1 = self.build_critic(input_shape, num_actions, learning_rates["critic"])
         self.critic2 = self.build_critic(input_shape, num_actions, learning_rates["critic"])
-        self.alpha = tf.Variable(initial_value=learning_rates["alpha"], trainable=True, dtype=tf.float32)
-        self.optimizer_alpha = tf.keras.optimizers.Adam(learning_rate=learning_rates["alpha"])
+        
+        # Target networks
+        self.target_critic1 = self.build_critic(input_shape, num_actions, learning_rates["critic"])
+        self.target_critic2 = self.build_critic(input_shape, num_actions, learning_rates["critic"])
+        
+        # Copy weights to target networks
+        self.target_critic1.set_weights(self.critic1.get_weights())
+        self.target_critic2.set_weights(self.critic2.get_weights())
+        
+        # Temperature parameter
+        self.log_alpha = tf.Variable(np.log(learning_rates["alpha"]), dtype=tf.float32)
+        self.alpha = tf.exp(self.log_alpha)
+        
+        # Optimizers
+        self.actor_optimizer = tf.keras.optimizers.Adam(
+            learning_rate=learning_rates["actor"],
+            clipnorm=1.0
+        )
+        self.critic_optimizer = tf.keras.optimizers.Adam(
+            learning_rate=learning_rates["critic"],
+            clipnorm=1.0
+        )
+        self.alpha_optimizer = tf.keras.optimizers.Adam(
+            learning_rate=learning_rates["alpha"],
+            clipnorm=1.0
+        )
 
     def build_actor(self, input_shape, num_actions, lr):
-        """
-        Build actor network with correct shape handling
-        Args:
-            input_shape: Shape of flattened input tensor
-            num_actions: Number of possible actions
-            lr: Learning rate
-        """
-        # Input layer
-        inputs = layers.Input(shape=(np.prod(input_shape),))  # Flattened input
+        """Enhanced actor network with regularization and residual connections"""
+        inputs = layers.Input(shape=(np.prod(input_shape),))
         
-        # Dense layers
-        x = layers.Dense(1024, activation="relu")(inputs)
-        x = layers.Dense(512, activation="relu")(x)
-        x = layers.Dense(256, activation="relu")(x)
+        # Initial normalization
+        x = layers.BatchNormalization()(inputs)
         
-        # Output layer
-        outputs = layers.Dense(num_actions, activation="softmax")(x)
+        # First dense block with residual connection
+        residual = x
+        x = layers.Dense(1024)(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.ReLU()(x)
+        x = layers.Dropout(0.2)(x)
+        if residual.shape[-1] == x.shape[-1]:
+            x = layers.Add()([x, residual])
+        
+        # Second dense block with residual connection
+        residual = x
+        x = layers.Dense(512)(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.ReLU()(x)
+        x = layers.Dropout(0.2)(x)
+        x = layers.Dense(512)(x)  # Match dimensions for residual
+        if residual.shape[-1] == x.shape[-1]:
+            x = layers.Add()([x, residual])
+        
+        # Third dense block
+        x = layers.Dense(256)(x)
+        x = layers.BatchNormalization()(x)
+        x = layers.ReLU()(x)
+        
+        # Output layer with scaled initialization and noise
+        outputs = layers.Dense(
+            num_actions,
+            activation=None,
+            kernel_initializer=tf.keras.initializers.RandomUniform(-3e-3, 3e-3)
+        )(x)
+        
+        # Add noise for exploration
+        noise = layers.GaussianNoise(0.1)(outputs)
+        outputs = layers.Activation('softmax')(outputs + noise)
         
         model = tf.keras.Model(inputs, outputs)
-        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr))
-        
         return model
 
     def build_critic(self, input_shape, num_actions, lr):
-        # State input branch should match flattened input
-        state_input = layers.Input(shape=(np.prod(input_shape),))  # Flattened input
-        x = layers.Dense(256, activation="relu")(state_input)
-        x = layers.Dense(128, activation="relu")(x)
+        """Enhanced critic network with separate state and action processing"""
+        # State input branch
+        state_input = layers.Input(shape=(np.prod(input_shape),))
+        state_x = layers.BatchNormalization()(state_input)
+        state_x = layers.Dense(512, activation='relu')(state_x)
+        state_x = layers.BatchNormalization()(state_x)
+        state_x = layers.Dropout(0.1)(state_x)
         
         # Action input branch
         action_input = layers.Input(shape=(num_actions,))
+        action_x = layers.Dense(512, activation='relu')(action_input)
+        action_x = layers.BatchNormalization()(action_x)
         
-        # Combine state and action
-        concat = layers.Concatenate()([x, action_input])
+        # Combine state and action pathways
+        combined = layers.Concatenate()([state_x, action_x])
         
-        # Dense layers
-        x = layers.Dense(256, activation="relu")(concat)
-        x = layers.Dense(128, activation="relu")(x)
+        # Process combined features
+        x = layers.Dense(512, activation='relu')(combined)
+        x = layers.BatchNormalization()(x)
+        x = layers.Dropout(0.1)(x)
+        x = layers.Dense(256, activation='relu')(x)
+        x = layers.BatchNormalization()(x)
         
         # Output Q-value
-        q_value = layers.Dense(1)(x)
+        q_value = layers.Dense(1, 
+                            kernel_initializer=tf.keras.initializers.RandomUniform(-3e-3, 3e-3)
+                            )(x)
         
         model = tf.keras.Model([state_input, action_input], q_value)
-        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr))
         return model
+
+    def update_target_networks(self, tau=0.005):
+        """Soft update target networks"""
+        for target, source in [(self.target_critic1, self.critic1), 
+                            (self.target_critic2, self.critic2)]:
+            for target_weight, source_weight in zip(target.weights, source.weights):
+                target_weight.assign(tau * source_weight + (1.0 - tau) * target_weight)
+
+    def get_action(self, state, training=True):
+        """Get actions with optional noise for exploration"""
+        state = tf.convert_to_tensor(state, dtype=tf.float32)
+        if len(state.shape) == 1:
+            state = tf.expand_dims(state, 0)
+            
+        action_probs = self.actor(state, training=training)
+        
+        if training:
+            # Add exploration noise during training
+            noise = tf.random.normal(shape=action_probs.shape, mean=0.0, stddev=0.1)
+            action_probs = tf.nn.softmax(tf.math.log(action_probs + 1e-10) + noise)
+        
+        actions = tf.random.categorical(tf.math.log(action_probs + 1e-10), 1)
+        return tf.one_hot(tf.squeeze(actions), depth=self.num_actions)
+
+    def save_models(self, path):
+        """Save all models and parameters"""
+        self.actor.save(f"{path}/actor")
+        self.critic1.save(f"{path}/critic1")
+        self.critic2.save(f"{path}/critic2")
+        self.target_critic1.save(f"{path}/target_critic1")
+        self.target_critic2.save(f"{path}/target_critic2")
+        np.save(f"{path}/alpha.npy", self.alpha.numpy())
+
+    def load_models(self, path):
+        """Load all models and parameters"""
+        self.actor = tf.keras.models.load_model(f"{path}/actor")
+        self.critic1 = tf.keras.models.load_model(f"{path}/critic1")
+        self.critic2 = tf.keras.models.load_model(f"{path}/critic2")
+        self.target_critic1 = tf.keras.models.load_model(f"{path}/target_critic1")
+        self.target_critic2 = tf.keras.models.load_model(f"{path}/target_critic2")
+        self.alpha.assign(np.load(f"{path}/alpha.npy"))
 
     def get_action(self, state):
         """
@@ -217,34 +315,39 @@ class SoftActorCritic:
         return actions
 
 def compute_reward(snr, sinr, interference_level):
-    # Cast all inputs to float32
+    # Cast inputs to float32
     snr = tf.cast(snr, tf.float32)
     sinr = tf.cast(sinr, tf.float32)
     interference_level = tf.cast(interference_level, tf.float32)
     
-    # Adjust target and threshold values
+    # Constants
     sinr_target = tf.constant(20.0, dtype=tf.float32)
-    sinr_threshold = tf.constant(5.0, dtype=tf.float32)  # Reduced from 10.0
-
-    # Softer normalization with reduced penalties
-    sinr_error = tf.clip_by_value((sinr - sinr_target) / 30.0, -1.0, 1.0)
-    snr_norm = tf.clip_by_value(snr / 40.0, -1.0, 1.0)
-    interference_norm = tf.clip_by_value(interference_level / 50.0, -1.0, 1.0)
-
-    # Adjusted reward weights
-    sinr_reward = 2.0 * (1.0 - tf.abs(sinr_error))
-    snr_reward = 1.0 * snr_norm
-    interference_reward = 1.0 * (1.0 - interference_norm)
-
-    # Softer penalty
-    penalty = tf.where(
-        sinr < sinr_threshold,
-        -0.5 * (sinr_threshold - sinr) / sinr_threshold,
-        tf.constant(0.0, dtype=tf.float32)
+    sinr_threshold = tf.constant(10.0, dtype=tf.float32)
+    
+    # SINR reward component (weighted more heavily)
+    sinr_error = (sinr - sinr_target) / sinr_target
+    sinr_reward = 3.0 * tf.exp(-tf.abs(sinr_error))  # Exponential reward
+    
+    # SNR reward component
+    snr_norm = snr / 40.0  # Normalize SNR
+    snr_reward = 2.0 * tf.sigmoid(snr_norm)  # Bounded positive reward
+    
+    # Interference penalty
+    interference_norm = interference_level / 100.0
+    interference_penalty = -1.0 * tf.sigmoid(interference_norm)
+    
+    # Additional reward for exceeding threshold
+    threshold_bonus = tf.where(
+        sinr > sinr_threshold,
+        1.0,
+        0.0
     )
-
-    total_reward = sinr_reward + snr_reward + interference_reward + penalty
-    return tf.clip_by_value(total_reward, -2.0, 2.0)  # Reduced range
+    
+    # Combine rewards with proper scaling
+    total_reward = sinr_reward + snr_reward + interference_penalty + threshold_bonus
+    
+    # Wider range for rewards
+    return tf.clip_by_value(total_reward, -5.0, 5.0)
 
 def compute_interference(channel_state, beamforming_vectors):
     """
@@ -414,21 +517,19 @@ def train_sac(training_data, validation_data, config):
         interference_levels = compute_interference(batch_channels_orig, actions)
         rewards = compute_reward(batch_snr, sinr_values, interference_levels)
         
-        # Convert rewards to numpy array
-        rewards = rewards.numpy()
+        # Convert tensors to numpy arrays
+        rewards_np = rewards.numpy()
+        batch_channels_flat_np = batch_channels_flat.numpy()
+        actions_np = actions.numpy()
         
         # Process each sample individually with correct shapes
         for i in range(config["batch_size"]):
-            s = batch_channels_flat[i].numpy()  # Single state
-            a = actions[i].numpy()              # Single action
-            r = float(rewards[i])               # Convert single reward to scalar
-            ns = batch_channels_flat[i].numpy() # Single next state
+            s = batch_channels_flat_np[i]  # Single state
+            a = actions_np[i]              # Single action
+            r = float(np.mean(rewards_np[i]))  # Take mean if reward is multi-dimensional
+            ns = batch_channels_flat_np[i] # Single next state
             
-            # Ensure shapes are correct before pushing
-            s = np.array(s, dtype=np.float32)
-            a = np.array(a, dtype=np.float32)
-            ns = np.array(ns, dtype=np.float32)
-            
+            # Push to replay buffer
             replay_buffer.push(s, a, r, ns)
 
     # Training loop
@@ -445,6 +546,9 @@ def train_sac(training_data, validation_data, config):
                     batch_channels_flat = training_channels_flat[start:end]  # Flattened for NN
                     batch_snr = training_data[1][start:end]
                     
+                    # In train_sac function, modify the reward computation and buffer push section:
+
+                    # Inside the training loop where rewards are computed:
                     with tf.GradientTape(persistent=True) as tape:
                         # Get actions using flattened data
                         actions = sac.get_action(batch_channels_flat)
@@ -455,14 +559,34 @@ def train_sac(training_data, validation_data, config):
                         # Compute rewards using original structure
                         sinr_values = compute_sinr(batch_channels_orig, actions)
                         interference_levels = compute_interference(batch_channels_orig, actions)
-                        rewards = tf.convert_to_tensor(
-                            [compute_reward(snr, sinr, interference) 
-                            for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)],
-                            dtype=tf.float32
-                        )
                         
-                        replay_buffer.push(batch_channels_flat, actions, rewards, batch_channels_flat)  # Note: in this case next_state is same as current state
+                        # Compute rewards for each sample individually
+                        rewards = []
+                        for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels):
+                            reward = compute_reward(snr, sinr, interference)
+                            # Ensure reward is scalar by taking mean if necessary
+                            if isinstance(reward, tf.Tensor):
+                                reward = tf.reduce_mean(reward)
+                            rewards.append(float(reward))
                         
+                        # Convert rewards list to tensor
+                        rewards = tf.convert_to_tensor(rewards, dtype=tf.float32)
+                        
+                        # Convert tensors to numpy arrays
+                        batch_channels_flat_np = batch_channels_flat.numpy()
+                        actions_np = actions.numpy()
+                        rewards_np = rewards.numpy()
+
+                        # Process each sample in the batch individually
+                        for i in range(config["batch_size"]):
+                            s = batch_channels_flat_np[i]  # Single state
+                            a = actions_np[i]              # Single action
+                            r = float(rewards_np[i])       # Single reward (now scalar)
+                            ns = batch_channels_flat_np[i] # Single next state
+                            
+                            # Push to replay buffer
+                            replay_buffer.push(s, a, r, ns)
+
                         # Sample from replay buffer for training
                         if len(replay_buffer) > config["batch_size"]:
                             states, actions, rewards, next_states = replay_buffer.sample(config["batch_size"])
@@ -674,12 +798,16 @@ if __name__ == "__main__":
         # Define training configuration
         train_config = {
             "episodes": CONFIG["number_of_episodes"],
-            "batch_size": CONFIG["mini_batch_size"],
-            "actor_lr": CONFIG["actor_lr"],
-            "critic_lr": CONFIG["critic_lr"],
-            "alpha_lr": CONFIG["alpha_lr"],
-            "validation_interval": CONFIG["validation_interval"],
-            "save_interval": CONFIG.get("checkpoint_interval", 10)
+            "batch_size": 128,  # Smaller batch size for better stability
+            "actor_lr": 1e-4,   # Slightly lower learning rate
+            "critic_lr": 1e-4,
+            "alpha_lr": 1e-4,
+            "validation_interval": 5,
+            "save_interval": 10,
+            "warmup_episodes": 20,  # More warmup episodes
+            "target_entropy": -np.log(1.0/MIMO_CONFIG["tx_antennas"]) * 0.98,  # Target entropy for alpha adaptation
+            "gamma": 0.99,  # Discount factor
+            "tau": 0.005,  # Soft update coefficient
         }
 
         # Process data
