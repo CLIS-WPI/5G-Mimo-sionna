@@ -491,12 +491,9 @@ def train_sac(training_data, validation_data, config):
                 training_history['validation_episodes'].append(episode)
                 tqdm.write(f"\nValidation reward at episode {episode+1}: {val_reward:.3f}\n")
 
-                # Log key metrics
-                self._log_training_progress(episode, avg_episode_reward, critic_loss, actor_loss, val_reward)
-
             # Save results and visualizations
             if episode % config["save_interval"] == 0:
-                self._save_results(sac, training_history, episode)
+                _save_results(sac, training_history, episode)
 
     print("Training complete.")
     print(f"\nResults saved in:")
@@ -506,7 +503,7 @@ def train_sac(training_data, validation_data, config):
     
     return sac, training_history
 
-def _log_training_progress(self, episode, avg_reward, critic_loss, actor_loss, val_reward):
+def _log_training_progress(episode, avg_reward, critic_loss, actor_loss, val_reward):
     """
     Log training progress and key metrics.
     """
@@ -519,7 +516,7 @@ def _log_training_progress(self, episode, avg_reward, critic_loss, actor_loss, v
     )
     print(log_message)
 
-def _save_results(self, sac, history, episode):
+def _save_results(sac, history, episode):
     """
     Save training results, models, and visualizations.
     """
