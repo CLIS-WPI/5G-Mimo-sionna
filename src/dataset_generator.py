@@ -206,23 +206,26 @@ def create_stream_management(num_users):
     return StreamManagement(rx_tx_association, num_streams_per_tx=1)
 
 def calculate_sinr(desired_signal, interference_signals, noise_power):
-    # Calculate signal power with antenna gain
-    signal_power = np.abs(desired_signal)**2 * db2lin(MIMO_CONFIG["antenna_gain"])
+    # Reshape inputs to ensure proper broadcasting
+    desired_signal = np.expand_dims(desired_signal, axis=-1)  # Add dimension for broadcasting
     
-    # Calculate interference power directly in dB scale
+    # Calculate signal power with antenna gain
+    signal_power = np.mean(np.abs(desired_signal)**2, axis=(-2, -1)) * db2lin(MIMO_CONFIG["antenna_gain"])
+    
+    # Generate interference power with proper shape
     interference_power = np.random.uniform(
         CHANNEL_CONFIG["interference"]["interference_power_range"][0],
         CHANNEL_CONFIG["interference"]["interference_power_range"][1],
         size=signal_power.shape
     )
     
-    # Convert interference from dB to linear for SINR calculation
+    # Convert interference from dB to linear
     interference_power_linear = db2lin(interference_power)
     
-    # Calculate SINR
+    # Calculate SINR ensuring proper broadcasting
     sinr = signal_power / (interference_power_linear + noise_power)
     
-    return lin2db(sinr), interference_power  # Return both SINR and interference in dB
+    return lin2db(sinr), interference_power
 
 def calculate_max_doppler_freq():
     """Calculate maximum Doppler frequency"""
@@ -238,8 +241,12 @@ def create_channel_model(num_users):
         num_tx=1,
         num_tx_ant=MIMO_CONFIG["tx_antennas"],
         dtype=tf.complex64,
-        normalize_channels=True,  # Add normalization
-        block_length=int(calculate_coherence_time() / RESOURCE_GRID["symbol_duration"])
+        normalize_channels=True,
+        block_length=int(calculate_coherence_time() / RESOURCE_GRID["symbol_duration"]),
+        # Add these parameters
+        correlation_matrix=None,  # Add spatial correlation
+        spatial_correlation=CHANNEL_CONFIG.get("spatial_correlation", 0.5),  # Add correlation coefficient
+        add_awgn=True  # Ensure noise is added
     )
 
 def create_ofdm_channel(channel_model, resource_grid):
@@ -255,16 +262,16 @@ def create_ofdm_channel(channel_model, resource_grid):
 
 def normalize_channel_realizations(channels):
     """Normalize channel realizations properly"""
-    # Calculate average power across all dimensions
-    power = tf.reduce_mean(tf.abs(channels)**2, axis=(-2, -1), keepdims=True)
-    # Normalize
-    return channels / tf.sqrt(power + 1e-12)
-
-def calculate_coherence_time():
-    """Calculate channel coherence time based on Doppler parameters"""
-    max_doppler = 2 * np.pi * CHANNEL_CONFIG["doppler_shift"]["max_speed"] / \
-                 SPEED_OF_LIGHT * CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"]
-    return 1 / max_doppler
+    # Calculate power across all antenna dimensions
+    power = tf.reduce_mean(tf.abs(channels)**2, axis=(-4, -3, -2, -1), keepdims=True)
+    # Add small epsilon to avoid division by zero
+    epsilon = 1e-12
+    # Normalize and maintain complex values
+    normalized_channels = channels / tf.sqrt(power + epsilon)
+    # Verify normalization
+    normalized_power = tf.reduce_mean(tf.abs(normalized_channels)**2)
+    tf.debugging.assert_near(normalized_power, 1.0, rtol=1e-4)
+    return normalized_channels
 
 
 def create_resource_grid():
@@ -409,17 +416,22 @@ def generate_dataset(output_file, num_samples):
             batch_size
         )
         
-        # Generate channel realizations
+        # After generating channels
         channels = channel((dummy_input, noise_power))
-        
-        # Handle the case where channels is a tuple
         if isinstance(channels, tuple):
             channels, _ = channels
-        
-        # Convert to numpy array for storage
         channels = channels.numpy()
 
+        # Add normalization
+        channels = normalize_channel_realizations(channels)
+
+        # Verify channel statistics
         verify_channel_statistics(channels)
+
+        # Check shapes before SINR calculation
+        print(f"Channel shape before reshape: {channels.shape}")
+        channels_reshaped = channels.reshape(batch_size, num_users, -1)
+        print(f"Channel shape after reshape: {channels_reshaped.shape}")
         
         # Initialize arrays for SINR and interference calculations
         sinr_values = np.zeros((batch_size, num_users))
@@ -539,13 +551,29 @@ def verify_channel_statistics(channels):
     real_parts = np.real(channels)
     imag_parts = np.imag(channels)
     
-    print("\nChannel Statistics:")
-    print(f"Real part - Mean: {np.mean(real_parts):.4f}, Std: {np.std(real_parts):.4f}")
-    print(f"Imag part - Mean: {np.mean(imag_parts):.4f}, Std: {np.std(imag_parts):.4f}")
-    print(f"Channel power: {np.mean(np.abs(channels)**2):.4f}")
+    # Calculate statistics
+    real_mean = np.mean(real_parts)
+    real_std = np.std(real_parts)
+    imag_mean = np.mean(imag_parts)
+    imag_std = np.std(imag_parts)
+    channel_power = np.mean(np.abs(channels)**2)
     
-    if np.allclose(channels, 0) or np.std(real_parts) < 1e-6:
+    print("\nChannel Statistics:")
+    print(f"Real part - Mean: {real_mean:.4f}, Std: {real_std:.4f}")
+    print(f"Imag part - Mean: {imag_mean:.4f}, Std: {imag_std:.4f}")
+    print(f"Channel power: {channel_power:.4f}")
+    
+    # Verify statistical properties
+    if np.allclose(channels, 0) or real_std < 1e-6 or imag_std < 1e-6:
         raise ValueError("Channel realizations appear to be zero or have very low variance")
+    
+    # Check for proper normalization
+    if not np.isclose(channel_power, 1.0, rtol=1e-2):
+        raise ValueError(f"Channel power ({channel_power:.4f}) is not properly normalized to 1.0")
+    
+    # Verify complex Gaussian properties
+    if not (-0.1 < real_mean < 0.1 and -0.1 < imag_mean < 0.1):
+        raise ValueError("Channel statistics do not match expected complex Gaussian distribution")
 
 if __name__ == "__main__":
     # Generate all datasets

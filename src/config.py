@@ -118,6 +118,13 @@ CHANNEL_CONFIG = {
     # New parameters
     "normalize_channels": True,
     "sampling_frequency": RESOURCE_GRID["subcarrier_spacing"] * RESOURCE_GRID["subcarriers"],
+    # Add these new parameters here
+    "spatial_correlation": 0.5,  # Add spatial correlation
+    "verification": {
+        "check_statistics": True,
+        "power_threshold": 1e-6,
+        "correlation_threshold": 0.1
+    }
 }
 
 MULTIUSER_CONFIG = {
