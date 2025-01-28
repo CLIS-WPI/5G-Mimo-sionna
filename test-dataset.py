@@ -45,7 +45,8 @@ class TestDatasetGeneration(unittest.TestCase):
             "sinr", 
             "interference",
             "user_association",
-            "precoding_matrices"
+            "precoding_matrices",
+            "doppler_info"
         ]
         
         for name, dataset in self.datasets.items():
@@ -58,11 +59,7 @@ class TestDatasetGeneration(unittest.TestCase):
         for name, dataset in self.datasets.items():
             with self.subTest(dataset=name):
                 num_samples = dataset["channel_realizations"].shape[0]
-                num_users = MULTIUSER_CONFIG["num_users"]
-                
-                # Print detailed information for debugging
-                print(f"\nDetailed dimension analysis for {name} dataset:")
-                print(f"Actual shape: {dataset['channel_realizations'].shape}")
+                num_users = CONFIG["num_users"]  # Changed from MULTIUSER_CONFIG to CONFIG
                 
                 # Expected shapes for each array
                 channel_shape = (
@@ -76,7 +73,9 @@ class TestDatasetGeneration(unittest.TestCase):
                 snr_shape = (num_samples,)
                 sinr_shape = (num_samples, num_users)
                 interference_shape = (num_samples, num_users)
-                precoding_shape = (num_samples, num_users, MIMO_CONFIG["rx_antennas"])
+                # Update precoding shape to match new structure
+                precoding_shape = (num_samples, MIMO_CONFIG["tx_antennas"], MIMO_CONFIG["rx_antennas"])
+                user_association_shape = (num_samples, num_users)
                 
                 # Test each array's shape
                 self.assertEqual(
@@ -108,7 +107,32 @@ class TestDatasetGeneration(unittest.TestCase):
                     precoding_shape,
                     f"Invalid precoding matrices shape in {name}"
                 )
-
+    def test_doppler_info(self):
+        """Test doppler information structure and values"""
+        for name, dataset in self.datasets.items():
+            with self.subTest(dataset=name):
+                # Check doppler_info structure
+                self.assertIn("doppler_info", dataset)
+                doppler_info = dataset["doppler_info"]
+                
+                # Check required fields
+                required_fields = ["max_speed", "min_speed", "carrier_frequency"]
+                for field in required_fields:
+                    self.assertIn(field, doppler_info)
+                
+                # Validate values
+                self.assertGreaterEqual(doppler_info["max_speed"], doppler_info["min_speed"])
+                self.assertGreaterEqual(doppler_info["min_speed"], 0)
+                self.assertGreater(doppler_info["carrier_frequency"], 0)
+                
+                # Check against config values
+                self.assertEqual(doppler_info["max_speed"], 
+                            CHANNEL_CONFIG["doppler_shift"]["max_speed"])
+                self.assertEqual(doppler_info["min_speed"], 
+                            CHANNEL_CONFIG["doppler_shift"]["min_speed"])
+                self.assertEqual(doppler_info["carrier_frequency"], 
+                            CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"])
+            
     def test_value_ranges(self):
         """Test value ranges for different metrics"""
         for name, dataset in self.datasets.items():
@@ -541,7 +565,29 @@ class TestDatasetGeneration(unittest.TestCase):
             print(f"Interference range: [{np.min(dataset['interference']):.2f}, "
                 f"{np.max(dataset['interference']):.2f}] dB")
             print(f"Channel power mean: {np.mean(np.abs(dataset['channel_realizations'])**2):.4f}")
-
+            
+            # Add Doppler information
+            doppler_info = dataset['doppler_info']
+            print("\nDoppler Information:")
+            print(f"Carrier Frequency: {doppler_info['carrier_frequency']/1e9:.2f} GHz")
+            print(f"Speed Range: [{doppler_info['min_speed']:.1f}, "
+                f"{doppler_info['max_speed']:.1f}] m/s")
+    
+    def test_channel_normalization(self):
+        """Test if channels are properly normalized"""
+        for name, dataset in self.datasets.items():
+            with self.subTest(dataset=name):
+                channels = dataset["channel_realizations"]
+                channel_power = np.mean(np.abs(channels)**2)
+                
+                # Test if power is close to 1
+                self.assertAlmostEqual(
+                    channel_power, 
+                    1.0, 
+                    delta=0.1,
+                    msg=f"Channel power not properly normalized in {name}"
+                )    
+                
 if __name__ == '__main__':
     # Create a test suite and custom test runner
     suite = unittest.TestLoader().loadTestsFromTestCase(TestDatasetGeneration)
