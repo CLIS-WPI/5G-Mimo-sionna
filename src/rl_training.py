@@ -749,11 +749,6 @@ def _save_results(sac, history, episode):
 def validate_model(sac, validation_data):
     """
     Validate model performance with proper reward scaling and statistics tracking
-    Args:
-        sac: Trained SAC model
-        validation_data: Tuple of ((original_channels, flattened_channels), snr)
-    Returns:
-        Average reward across validation set with proper normalization
     """
     # Unpack validation data correctly
     (val_channels_orig, val_channels_flat), val_snr = validation_data
@@ -780,23 +775,23 @@ def validate_model(sac, validation_data):
             batch_size = end - start
             
             try:
-                # Get actions using flattened data (without exploration noise)
+                # Get actions
                 actions = sac.get_action(batch_channels_flat, training=False)
                 
                 # Compute metrics using original structure
                 sinr_values = compute_sinr(batch_channels_orig, actions)
                 interference_levels = compute_interference(batch_channels_orig, actions)
                 
-                # Calculate rewards with proper tensor handling
+                # Calculate rewards
                 rewards = tf.stack([
                     compute_reward(snr, sinr, interference)
                     for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)
                 ])
                 
-                # Convert to numpy and store metrics
-                rewards_np = rewards.numpy()
-                sinr_np = sinr_values.numpy()
-                interference_np = interference_levels.numpy()
+                # Convert to numpy and ensure flat arrays
+                rewards_np = rewards.numpy().flatten()  # Ensure rewards are flattened
+                sinr_np = sinr_values.numpy().flatten()
+                interference_np = interference_levels.numpy().flatten()
                 
                 # Update statistics
                 rewards_list.extend(rewards_np)
@@ -808,7 +803,7 @@ def validate_model(sac, validation_data):
                 total_reward += np.sum(rewards_np)
                 total_samples += batch_size
                 
-                # Update progress bar with detailed metrics
+                # Update progress bar
                 val_pbar.set_postfix({
                     'batch_reward': f'{batch_reward:.3f}',
                     'avg_sinr': f'{np.mean(sinr_np):.2f}',
@@ -823,16 +818,21 @@ def validate_model(sac, validation_data):
     # Re-enable training mode
     sac.actor.trainable = True
     
+    # Convert lists to numpy arrays and ensure they're flat
+    rewards_array = np.array(rewards_list, dtype=np.float32)
+    sinr_array = np.array(sinr_list, dtype=np.float32)
+    interference_array = np.array(interference_list, dtype=np.float32)
+    
     # Compute final statistics
     if total_samples > 0:
         avg_reward = total_reward / total_samples
-        avg_sinr = np.mean(sinr_list)
-        avg_interference = np.mean(interference_list)
+        avg_sinr = np.mean(sinr_array)
+        avg_interference = np.mean(interference_array)
         
         # Compute reward statistics
-        reward_std = np.std(rewards_list)
-        reward_min = np.min(rewards_list)
-        reward_max = np.max(rewards_list)
+        reward_std = np.std(rewards_array)
+        reward_min = np.min(rewards_array)
+        reward_max = np.max(rewards_array)
         
         # Print validation statistics
         print("\nValidation Statistics:")
@@ -863,8 +863,8 @@ if __name__ == "__main__":
         train_config = {
             "episodes": CONFIG["number_of_episodes"],
             "batch_size": 128,  # Smaller batch size for better stability
-            "actor_lr": 1e-4,   # Slightly lower learning rate
-            "critic_lr": 1e-4,
+            "actor_lr": 1e-5,   # Slightly lower learning rate
+            "critic_lr": 1e-5,
             "alpha_lr": 3e-4,
             "validation_interval": 5,
             "save_interval": 10,
