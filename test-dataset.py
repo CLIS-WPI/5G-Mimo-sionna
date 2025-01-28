@@ -593,40 +593,42 @@ class TestDatasetGeneration(unittest.TestCase):
                 )    
 
 if __name__ == '__main__':
-    # Create test suite
-    suite = unittest.TestLoader().loadTestsFromTestCase(TestDatasetGeneration)
-    runner = unittest.TextTestRunner(verbosity=2)
-    
     try:
-        # Create test instance and ensure datasets are loaded
-        test_instance = TestDatasetGeneration()
-        TestDatasetGeneration.setUpClass()  # Use class method directly
+        # Create test suite
+        suite = unittest.TestLoader().loadTestsFromTestCase(TestDatasetGeneration)
         
-        # Run all tests
+        # Use a test runner with higher verbosity
+        runner = unittest.TextTestRunner(verbosity=3)
+        
+        print("Starting test execution...")
         result = runner.run(suite)
         
-        # Generate plots and print summary only if tests were successful
+        print(f"\nTests run: {result.testsRun}")
+        print(f"Failures: {len(result.failures)}")
+        print(f"Errors: {len(result.errors)}")
+        
         if result.wasSuccessful():
             print("\nAll tests passed successfully!")
             
-            # Create plots directory
-            os.makedirs("./plots", exist_ok=True)
+            # Create test instance for visualization
+            test_instance = TestDatasetGeneration()
+            TestDatasetGeneration.setUpClass()
             
-            # Generate all visualizations
-            print("\nGenerating visualization plots...")
-            test_instance._plot_channel_properties()
-            test_instance._plot_correlation_matrices()
-            
-            # Print final summary
+            print("\nGenerating plots...")
             test_instance.print_test_summary()
-            
-            print("\nVisualization plots have been generated in ./plots directory")
+            print("\nPlots generated successfully")
         else:
-            print("\nSome tests failed. Check the test output above for details.")
-        
+            print("\nTest execution failed!")
+            for failure in result.failures:
+                print(f"\nFailure in {failure[0]}")
+                print(failure[1])
+            for error in result.errors:
+                print(f"\nError in {error[0]}")
+                print(error[1])
+            
     except Exception as e:
-        print(f"\nError during test execution: {str(e)}")
-        raise
+        print(f"Error during test execution: {str(e)}")
+        import traceback
+        traceback.print_exc()
     finally:
-        # Cleanup matplotlib resources
         plt.close('all')
