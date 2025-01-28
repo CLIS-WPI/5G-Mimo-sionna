@@ -560,91 +560,82 @@ def train_sac(training_data, validation_data, config):
                         # Validate shapes
                         validate_shapes(batch_channels_flat, current_actions)
                         
-                        # Compute immediate rewards using original structure
+                        # Compute rewards
                         sinr_values = compute_sinr(batch_channels_orig, current_actions)
                         interference_levels = compute_interference(batch_channels_orig, current_actions)
+                        rewards = tf.convert_to_tensor([
+                            float(tf.reduce_mean(compute_reward(snr, sinr, interference)))
+                            for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)
+                        ], dtype=tf.float32)
                         
-                        # Compute rewards for each sample individually
-                        rewards = []
-                        for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels):
-                            reward = compute_reward(snr, sinr, interference)
-                            if isinstance(reward, tf.Tensor):
-                                reward = tf.reduce_mean(reward)
-                            rewards.append(float(reward))
-                        
-                        # Convert rewards to tensor
-                        rewards = tf.convert_to_tensor(rewards, dtype=tf.float32)
-                        
-                        # Get next state actions and probabilities for target computation
+                        # Get next state values
                         next_actions = sac.get_action(batch_channels_flat)
                         next_action_probs = sac.actor(batch_channels_flat)
                         next_log_probs = tf.math.log(next_action_probs + 1e-10)
                         
-                        # Compute current Q-values
+                        # Compute Q-values
                         current_q1 = sac.critic1([batch_channels_flat, current_actions])
                         current_q2 = sac.critic2([batch_channels_flat, current_actions])
-                        
-                        # Compute target Q-values using target networks
                         target_q1 = sac.target_critic1([batch_channels_flat, next_actions])
                         target_q2 = sac.target_critic2([batch_channels_flat, next_actions])
-                        
-                        # Use minimum Q-value for targets (Double Q-learning)
                         min_target_q = tf.minimum(target_q1, target_q2)
                         
-                        # Compute entropy term
+                        # Compute entropy
                         entropy = -tf.reduce_sum(current_action_probs * current_log_probs, axis=-1, keepdims=True)
                         
-                        # Compute target value with entropy regularization
+                        # Compute target value
                         target_value = rewards[:, tf.newaxis] + config["gamma"] * (min_target_q - sac.alpha * next_log_probs)
                         
-                        # Compute critic losses
+                        # Compute losses
                         critic1_loss = tf.reduce_mean(tf.square(target_value - current_q1))
                         critic2_loss = tf.reduce_mean(tf.square(target_value - current_q2))
                         critic_loss = critic1_loss + critic2_loss
                         
-                        # Compute actor loss with entropy regularization
                         q_values = tf.minimum(current_q1, current_q2)
                         actor_loss = tf.reduce_mean(sac.alpha * current_log_probs - q_values)
                         
-                        # Compute temperature (alpha) loss
+                        # Modified alpha loss computation
                         alpha_loss = -tf.reduce_mean(
                             sac.alpha * tf.stop_gradient(entropy + config["target_entropy"])
                         )
 
-                        # Store experience in replay buffer
-                        batch_channels_flat_np = batch_channels_flat.numpy()
-                        current_actions_np = current_actions.numpy()
-                        rewards_np = rewards.numpy()
-                        
-                        for i in range(config["batch_size"]):
-                            replay_buffer.push(
-                                batch_channels_flat_np[i],
-                                current_actions_np[i],
-                                float(rewards_np[i]),
-                                batch_channels_flat_np[i]
-                            )
+                    # Compute gradients
+                    critic1_grads = tape.gradient(critic_loss, sac.critic1.trainable_variables)
+                    critic2_grads = tape.gradient(critic_loss, sac.critic2.trainable_variables)
+                    actor_grads = tape.gradient(actor_loss, sac.actor.trainable_variables)
+                    alpha_grads = tape.gradient(alpha_loss, [sac.alpha])
 
-                        # Compute and clip gradients
-                        critic1_grads = tape.gradient(critic_loss, sac.critic1.trainable_variables)
-                        critic2_grads = tape.gradient(critic_loss, sac.critic2.trainable_variables)
-                        actor_grads = tape.gradient(actor_loss, sac.actor.trainable_variables)
-                        alpha_grads = tape.gradient(alpha_loss, [sac.alpha])
+                    # Clip gradients
+                    critic1_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in critic1_grads]
+                    critic2_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in critic2_grads]
+                    actor_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in actor_grads]
 
-                        # Clip gradients
-                        critic1_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in critic1_grads]
-                        critic2_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in critic2_grads]
-                        actor_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in actor_grads]
+                    # Apply gradients with safe handling of alpha
+                    sac.critic1.optimizer.apply_gradients(zip(critic1_grads, sac.critic1.trainable_variables))
+                    sac.critic2.optimizer.apply_gradients(zip(critic2_grads, sac.critic2.trainable_variables))
+                    sac.actor.optimizer.apply_gradients(zip(actor_grads, sac.actor.trainable_variables))
 
-                        # Apply gradients
-                        sac.critic1.optimizer.apply_gradients(zip(critic1_grads, sac.critic1.trainable_variables))
-                        sac.critic2.optimizer.apply_gradients(zip(critic2_grads, sac.critic2.trainable_variables))
-                        sac.actor.optimizer.apply_gradients(zip(actor_grads, sac.actor.trainable_variables))
-                        sac.alpha_optimizer.apply_gradients(zip(alpha_grads, [sac.alpha]))
+                    # Safe alpha gradient application
+                    if alpha_grads[0] is not None:
+                        sac.alpha_optimizer.apply_gradients([(alpha_grads[0], sac.alpha)])
+
+                    # Store experience in replay buffer
+                    batch_channels_flat_np = batch_channels_flat.numpy()
+                    current_actions_np = current_actions.numpy()
+                    rewards_np = rewards.numpy()
+                    
+                    for i in range(config["batch_size"]):
+                        replay_buffer.push(
+                            batch_channels_flat_np[i],
+                            current_actions_np[i],
+                            float(rewards_np[i]),
+                            batch_channels_flat_np[i]
+                        )
 
                     # Update target networks
                     sac.update_target_networks(config["tau"])
 
-                    # Clean up the tape
+                    # Clean up
                     del tape
 
                     # Track training history
