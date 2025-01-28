@@ -192,7 +192,9 @@ class TestDatasetGeneration(unittest.TestCase):
         """Verify channel data generation properties"""
         print("\nChannel Data Generation Test Results:")
         print("=" * 50)
-        
+        self._plot_channel_properties()
+        self._plot_correlation_matrices()
+
         for name, dataset in self.datasets.items():
             with self.subTest(dataset=name):
                 channel_data = dataset["channel_realizations"]
@@ -555,7 +557,9 @@ class TestDatasetGeneration(unittest.TestCase):
         """Print summary of all test results"""
         print("\nTest Summary Report")
         print("=" * 50)
-        
+        self._plot_channel_properties()
+        self._plot_correlation_matrices()
+
         for name, dataset in self.datasets.items():
             print(f"\nDataset: {name}")
             print("-" * 30)
@@ -587,32 +591,42 @@ class TestDatasetGeneration(unittest.TestCase):
                     delta=0.1,
                     msg=f"Channel power not properly normalized in {name}"
                 )    
-                
+
 if __name__ == '__main__':
-    # Create a test suite and custom test runner
+    # Create test suite
     suite = unittest.TestLoader().loadTestsFromTestCase(TestDatasetGeneration)
     runner = unittest.TextTestRunner(verbosity=2)
     
     try:
-        # Run the tests
+        # Create test instance and ensure datasets are loaded
         test_instance = TestDatasetGeneration()
-        test_instance.setUpClass()  # Ensure datasets are loaded
+        TestDatasetGeneration.setUpClass()  # Use class method directly
+        
+        # Run all tests
         result = runner.run(suite)
         
-        # Print summary only if tests were successful
+        # Generate plots and print summary only if tests were successful
         if result.wasSuccessful():
             print("\nAll tests passed successfully!")
+            
+            # Create plots directory
+            os.makedirs("./plots", exist_ok=True)
+            
+            # Generate all visualizations
+            print("\nGenerating visualization plots...")
+            test_instance._plot_channel_properties()
+            test_instance._plot_correlation_matrices()
+            
+            # Print final summary
             test_instance.print_test_summary()
+            
+            print("\nVisualization plots have been generated in ./plots directory")
         else:
             print("\nSome tests failed. Check the test output above for details.")
-            
-        # Cleanup plots directory if needed
-        try:
-            if os.path.exists("./plots"):
-                print("\nTest plots have been generated in ./plots directory")
-        except Exception as e:
-            print(f"\nWarning: Error checking plots directory: {str(e)}")
-            
+        
     except Exception as e:
         print(f"\nError during test execution: {str(e)}")
         raise
+    finally:
+        # Cleanup matplotlib resources
+        plt.close('all')
