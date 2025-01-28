@@ -63,7 +63,7 @@ MIMO_CONFIG = {
     "array_type": "ULA",  # Uniform Linear Array
     "element_spacing": 0.5,  # Spacing between elements in wavelengths
     "polarization": "single",  # Single polarization
-    "antenna_gain": 15,  # Change from (5,15) to fixed 15 dBi for maximum gain
+    "antenna_gain": 5,  # Change from (5,15) to fixed 5 
     "antenna_pattern": "directional",  # Beam pattern type
     "array_orientation": "fixed",  # Azimuth/elevation angles (static)
     "sinr_weight": 0.3,  # Weight for SINR in reward calculation
@@ -82,38 +82,42 @@ RESOURCE_GRID = {
     "symbol_duration": 71.4e-6,  # Duration of one symbol in seconds
     "bandwidth": 2e6,  # Bandwidth in Hz
     "modulation_order": "QPSK",  # Modulation format
-    "num_guard_carriers": (5, 6),  # Guard carriers left/right (based on typical LTE/5G settings)
+    "num_guard_carriers": (6, 6),  # Guard carriers left/right (based on typical LTE/5G settings)
     "dc_null": True  # Null the DC subcarrier
 }
 
 # Channel Model Configuration
 CHANNEL_CONFIG = {
-    "type": "rayleigh",  # Rayleigh block fading model
-    "num_paths": 6,      # Reduce from 10 to 6 to focus on stronger paths
-    "coherence_time": 1,  # Coherence time in slots
-    "user_type": "static",  # Static user positions
-    "path_loss_model": "FSPL",  # Free space path loss model
-    "snr_range": (10, 30),  
-    "delay_spread": (0.1e-6, 0.5e-6),  # Reduce max delay spread
+    "type": "rayleigh",
+    "num_paths": 6,
+    "coherence_time": 1,
+    "user_type": "static",
+    "path_loss_model": "FSPL",
+    "snr_range": (10, 30),
+    "delay_spread": (0.1e-6, 0.5e-6),
     "doppler_shift": {
-        "min_speed": 0.1,  # m/s (minimum speed to avoid purely static scenario)
-        "max_speed": 30.0,  # m/s (typical pedestrian speed)
-        "carrier_frequency": 3.5e9,  # Hz (carrier frequency in Hz)
-        },
-    "spatial_consistency": "static",  # No variations in channel
-    "antenna_height": 1.5,  # Fixed antenna height in meters
+        "min_speed": 0.1,
+        "max_speed": 30.0,
+        "carrier_frequency": 3.5e9,
+    },
+    "spatial_consistency": "static",
+    "antenna_height": 1.5,
+    # Updated interference configuration
     "interference": {
         "enabled": True,
         "model_type": "multi_user",
-        "num_interferers": 2,        # Reduced from 3 to 2 interferers
-        "interference_power_range": (-100, -80),  
-        "spatial_correlation": 0.3,  
+        "num_interferers": 2,
+        "interference_power_range": (-120, -60),  # Updated range
+        "spatial_correlation": 0.3,
     },
     "sinr_calculation": {
         "enabled": True,
         "method": "exact",
-        "averaging_window": 5,      # Reduced from 10 to 5
+        "averaging_window": 5,
     },
+    # New parameters
+    "normalize_channels": True,
+    "sampling_frequency": RESOURCE_GRID["subcarrier_spacing"] * RESOURCE_GRID["subcarriers"],
 }
 
 MULTIUSER_CONFIG = {

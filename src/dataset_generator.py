@@ -52,6 +52,7 @@ from sionna.mimo.precoding import zero_forcing_precoder, normalize_precoding_pow
 from utill.utils import db2lin, lin2db
 from config import CONFIG, MIMO_CONFIG, RESOURCE_GRID, CHANNEL_CONFIG, SIONNA_CONFIG, OUTPUT_FILES
 from sionna.ofdm import ResourceGrid
+from sionna.channel.tr38901 import TDL
 import gc
 import psutil
 # Ensure output directories exist
@@ -230,15 +231,34 @@ def calculate_max_doppler_freq():
             SPEED_OF_LIGHT)
 
 def create_channel_model(num_users):
-    """Create channel model with proper Doppler configuration"""
-    
+    """Create proper channel model with normalization"""
     return RayleighBlockFading(
         num_rx=num_users,
         num_rx_ant=MIMO_CONFIG["rx_antennas"],
         num_tx=1,
         num_tx_ant=MIMO_CONFIG["tx_antennas"],
+        dtype=tf.complex64,
+        normalize_channels=True,  # Add normalization
+        block_length=int(calculate_coherence_time() / RESOURCE_GRID["symbol_duration"])
+    )
+
+def create_ofdm_channel(channel_model, resource_grid):
+    """Create OFDM channel with proper configuration"""
+    return OFDMChannel(
+        channel_model=channel_model,
+        resource_grid=resource_grid,
+        add_awgn=True,
+        normalize_channel=True,
+        return_channel=True,
         dtype=tf.complex64
     )
+
+def normalize_channel_realizations(channels):
+    """Normalize channel realizations properly"""
+    # Calculate average power across all dimensions
+    power = tf.reduce_mean(tf.abs(channels)**2, axis=(-2, -1), keepdims=True)
+    # Normalize
+    return channels / tf.sqrt(power + 1e-12)
 
 def calculate_coherence_time():
     """Calculate channel coherence time based on Doppler parameters"""
@@ -398,6 +418,8 @@ def generate_dataset(output_file, num_samples):
         
         # Convert to numpy array for storage
         channels = channels.numpy()
+
+        verify_channel_statistics(channels)
         
         # Initialize arrays for SINR and interference calculations
         sinr_values = np.zeros((batch_size, num_users))
@@ -511,6 +533,19 @@ def generate_dataset(output_file, num_samples):
     # Clean up any remaining temporary files
     cleanup_temp_files(temp_files)
     return dataset
+
+def verify_channel_statistics(channels):
+    """Verify channel statistics are correct"""
+    real_parts = np.real(channels)
+    imag_parts = np.imag(channels)
+    
+    print("\nChannel Statistics:")
+    print(f"Real part - Mean: {np.mean(real_parts):.4f}, Std: {np.std(real_parts):.4f}")
+    print(f"Imag part - Mean: {np.mean(imag_parts):.4f}, Std: {np.std(imag_parts):.4f}")
+    print(f"Channel power: {np.mean(np.abs(channels)**2):.4f}")
+    
+    if np.allclose(channels, 0) or np.std(real_parts) < 1e-6:
+        raise ValueError("Channel realizations appear to be zero or have very low variance")
 
 if __name__ == "__main__":
     # Generate all datasets

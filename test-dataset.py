@@ -12,11 +12,30 @@ class TestDatasetGeneration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Load all datasets once before running tests"""
-        cls.datasets = {
-            "training": np.load("./data/training/training_data.npy", allow_pickle=True).item(),
-            "validation": np.load("./data/validation/validation_data.npy", allow_pickle=True).item(),
-            "test": np.load("./data/test/test_data.npy", allow_pickle=True).item()
-        }
+        try:
+            for split in ['training', 'validation', 'test']:
+                path = f"./data/{split}/{split}_data.npy"
+                if not os.path.exists(path):
+                    raise FileNotFoundError(f"Dataset file not found: {path}")
+                
+            cls.datasets = {
+                "training": np.load("./data/training/training_data.npy", allow_pickle=True).item(),
+                "validation": np.load("./data/validation/validation_data.npy", allow_pickle=True).item(),
+                "test": np.load("./data/test/test_data.npy", allow_pickle=True).item()
+            }
+            
+            # Verify data is not empty
+            for name, dataset in cls.datasets.items():
+                if not dataset or len(dataset) == 0:
+                    raise ValueError(f"Dataset {name} is empty")
+                
+            print("Successfully loaded datasets:")
+            for name, dataset in cls.datasets.items():
+                print(f"{name}: {dataset['channel_realizations'].shape}")
+                
+        except Exception as e:
+            print(f"Error loading datasets: {str(e)}")
+            raise
 
     def test_required_keys(self):
         """Test presence of all required keys in datasets"""
