@@ -160,8 +160,13 @@ class SoftActorCritic:
         self.alpha = tf.Variable(1.0, dtype=tf.float32, trainable=True, name='alpha')
         
         # Optimizers
+        # In the SAC initialization
         self.actor_optimizer = tf.keras.optimizers.Adam(
-            learning_rate=learning_rates["actor"],
+            learning_rate=tf.keras.optimizers.schedules.ExponentialDecay(
+                initial_learning_rate=learning_rates["actor"],
+                decay_steps=1000,
+                decay_rate=0.95
+            ),
             clipnorm=1.0
         )
         self.critic_optimizer = tf.keras.optimizers.Adam(
@@ -325,34 +330,29 @@ def compute_reward(snr, sinr, interference_level):
     sinr = tf.cast(sinr, tf.float32)
     interference_level = tf.cast(interference_level, tf.float32)
     
-    # Constants
+    # Normalize values
     sinr_target = tf.constant(20.0, dtype=tf.float32)
     sinr_threshold = tf.constant(10.0, dtype=tf.float32)
     
-    # SINR reward component (weighted more heavily)
+    # SINR reward with better scaling
     sinr_error = (sinr - sinr_target) / sinr_target
-    sinr_reward = 3.0 * tf.exp(-tf.abs(sinr_error))  # Exponential reward
+    sinr_reward = tf.exp(-tf.abs(sinr_error))  # Bounded between 0 and 1
     
-    # SNR reward component
-    snr_norm = snr / 40.0  # Normalize SNR
-    snr_reward = 2.0 * tf.sigmoid(snr_norm)  # Bounded positive reward
+    # SNR reward component with normalization
+    snr_norm = tf.clip_by_value(snr / 40.0, 0.0, 1.0)  # Normalize and clip SNR
     
-    # Interference penalty
-    interference_norm = interference_level / 100.0
-    interference_penalty = -1.0 * tf.sigmoid(interference_norm)
+    # Interference penalty with better scaling
+    interference_norm = tf.clip_by_value(interference_level / 100.0, 0.0, 1.0)
+    interference_penalty = -interference_norm
     
-    # Additional reward for exceeding threshold
-    threshold_bonus = tf.where(
-        sinr > sinr_threshold,
-        1.0,
-        0.0
+    # Combine rewards with proper weighting
+    total_reward = (
+        0.6 * sinr_reward +
+        0.3 * snr_norm +
+        0.1 * interference_penalty
     )
     
-    # Combine rewards with proper scaling
-    total_reward = sinr_reward + snr_reward + interference_penalty + threshold_bonus
-    
-    # Wider range for rewards
-    return tf.clip_by_value(total_reward, -5.0, 5.0)
+    return total_reward
 
 def compute_interference(channel_state, beamforming_vectors):
     """
@@ -441,6 +441,11 @@ def compute_sinr(channel_state, beamforming_vectors, noise_power=1.0):
     sinr = 10.0 * tf.math.log(signal_power / (interference + noise_power)) / tf.math.log(10.0)
     
     return sinr
+
+def log_gradient_norms(grads, name):
+    norms = [tf.norm(g) for g in grads if g is not None]
+    avg_norm = tf.reduce_mean(norms) if norms else 0
+    print(f"{name} gradient norm: {avg_norm:.4f}")
 
 def train_sac(training_data, validation_data, config):
     """
@@ -594,10 +599,11 @@ def train_sac(training_data, validation_data, config):
                         q_values = tf.minimum(current_q1, current_q2)
                         actor_loss = tf.reduce_mean(sac.alpha * current_log_probs - q_values)
                         
-                        # Modified alpha loss computation
+                        # Modified alpha loss computation and update
                         alpha_loss = -tf.reduce_mean(
-                            sac.alpha * tf.stop_gradient(entropy + config["target_entropy"])
+                            sac.log_alpha * tf.stop_gradient(entropy + config["target_entropy"])
                         )
+                        alpha = tf.exp(sac.log_alpha)
 
                     # Compute gradients
                     critic1_grads = tape.gradient(critic_loss, sac.critic1.trainable_variables)
@@ -605,10 +611,16 @@ def train_sac(training_data, validation_data, config):
                     actor_grads = tape.gradient(actor_loss, sac.actor.trainable_variables)
                     alpha_grads = tape.gradient(alpha_loss, [sac.alpha])
 
-                    # Clip gradients
-                    critic1_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in critic1_grads]
-                    critic2_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in critic2_grads]
-                    actor_grads = [tf.clip_by_norm(g, 1.0) if g is not None else g for g in actor_grads]
+                    # Monitor gradient norms
+                    log_gradient_norms(critic1_grads, "Critic1")
+                    log_gradient_norms(actor_grads, "Actor")
+                    log_gradient_norms(alpha_grads, "Alpha")
+
+                    # Adjust clipping threshold based on monitored norms
+                    clip_norm = 0.5  # Reduce from 1.0 if gradients are too large
+                    critic1_grads = [tf.clip_by_norm(g, clip_norm) if g is not None else g for g in critic1_grads]
+                    critic2_grads = [tf.clip_by_norm(g, clip_norm) if g is not None else g for g in critic2_grads]
+                    actor_grads = [tf.clip_by_norm(g, clip_norm) if g is not None else g for g in actor_grads]
 
                     # Apply gradients with safe handling of alpha
                     sac.critic1.optimizer.apply_gradients(zip(critic1_grads, sac.critic1.trainable_variables))
@@ -758,45 +770,105 @@ def _save_results(sac, history, episode):
 # Validation function
 def validate_model(sac, validation_data):
     """
-    Validate model performance
+    Validate model performance with proper reward scaling and statistics tracking
     Args:
         sac: Trained SAC model
         validation_data: Tuple of ((original_channels, flattened_channels), snr)
     Returns:
-        Average reward across validation set
+        Average reward across validation set with proper normalization
     """
     # Unpack validation data correctly
     (val_channels_orig, val_channels_flat), val_snr = validation_data
-    total_reward = 0
+    
+    # Initialize metrics
+    total_reward = 0.0
+    total_samples = 0
+    rewards_list = []
+    sinr_list = []
+    interference_list = []
+    
+    # Disable training mode for validation
+    sac.actor.trainable = False
     
     total_batches = len(val_channels_orig) // CONFIG["batch_size"]
     with tqdm(total=total_batches, desc="Validating", leave=False) as val_pbar:
         for start in range(0, len(val_channels_orig), CONFIG["batch_size"]):
             end = start + CONFIG["batch_size"]
+            
             # Get batch data
             batch_channels_orig = val_channels_orig[start:end]
             batch_channels_flat = val_channels_flat[start:end]
             batch_snr = val_snr[start:end]
-
-            # Get actions using flattened data
-            actions = sac.get_action(batch_channels_flat)
+            batch_size = end - start
             
-            # Compute metrics using original structure
-            sinr_values = compute_sinr(batch_channels_orig, actions)
-            interference_levels = compute_interference(batch_channels_orig, actions)
-            
-            # Calculate rewards using the same reward function
-            rewards = np.array([compute_reward(snr, sinr, interference) 
-                            for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)])
-            
-            batch_reward = np.mean(rewards)
-            total_reward += np.sum(rewards)
-            
-            val_pbar.set_postfix({'batch_reward': f'{batch_reward:.3f}'})
-            val_pbar.update(1)
-
-        avg_reward = total_reward / len(val_channels_orig)
-        return avg_reward
+            try:
+                # Get actions using flattened data (without exploration noise)
+                actions = sac.get_action(batch_channels_flat, training=False)
+                
+                # Compute metrics using original structure
+                sinr_values = compute_sinr(batch_channels_orig, actions)
+                interference_levels = compute_interference(batch_channels_orig, actions)
+                
+                # Calculate rewards with proper tensor handling
+                rewards = tf.stack([
+                    compute_reward(snr, sinr, interference)
+                    for snr, sinr, interference in zip(batch_snr, sinr_values, interference_levels)
+                ])
+                
+                # Convert to numpy and store metrics
+                rewards_np = rewards.numpy()
+                sinr_np = sinr_values.numpy()
+                interference_np = interference_levels.numpy()
+                
+                # Update statistics
+                rewards_list.extend(rewards_np)
+                sinr_list.extend(sinr_np)
+                interference_list.extend(interference_np)
+                
+                # Update running totals
+                batch_reward = np.mean(rewards_np)
+                total_reward += np.sum(rewards_np)
+                total_samples += batch_size
+                
+                # Update progress bar with detailed metrics
+                val_pbar.set_postfix({
+                    'batch_reward': f'{batch_reward:.3f}',
+                    'avg_sinr': f'{np.mean(sinr_np):.2f}',
+                    'avg_interference': f'{np.mean(interference_np):.2f}'
+                })
+                val_pbar.update(1)
+                
+            except tf.errors.InvalidArgumentError as e:
+                print(f"Error in validation batch {start//CONFIG['batch_size']}: {str(e)}")
+                continue
+    
+    # Re-enable training mode
+    sac.actor.trainable = True
+    
+    # Compute final statistics
+    if total_samples > 0:
+        avg_reward = total_reward / total_samples
+        avg_sinr = np.mean(sinr_list)
+        avg_interference = np.mean(interference_list)
+        
+        # Compute reward statistics
+        reward_std = np.std(rewards_list)
+        reward_min = np.min(rewards_list)
+        reward_max = np.max(rewards_list)
+        
+        # Print validation statistics
+        print("\nValidation Statistics:")
+        print(f"Average Reward: {avg_reward:.3f} (±{reward_std:.3f})")
+        print(f"Reward Range: [{reward_min:.3f}, {reward_max:.3f}]")
+        print(f"Average SINR: {avg_sinr:.2f} dB")
+        print(f"Average Interference: {avg_interference:.2f}")
+        
+        # Return normalized average reward
+        normalized_reward = np.clip(avg_reward, -5.0, 5.0)
+        return normalized_reward
+    else:
+        print("Warning: No valid samples in validation set")
+        return 0.0
     
 def update_alpha(self, alpha_value):
     """Update the alpha parameter value"""
