@@ -265,6 +265,7 @@ class SoftActorCritic:
             for target_weight, source_weight in zip(target.weights, source.weights):
                 target_weight.assign(tau * source_weight + (1.0 - tau) * target_weight)
 
+    # Keep this implementation
     def get_action(self, state, training=True):
         """Get actions with optional noise for exploration"""
         state = tf.convert_to_tensor(state, dtype=tf.float32)
@@ -300,29 +301,6 @@ class SoftActorCritic:
         self.target_critic1 = tf.keras.models.load_model(f"{path}/target_critic1")
         self.target_critic2 = tf.keras.models.load_model(f"{path}/target_critic2")
         self.alpha.assign(np.load(f"{path}/alpha.npy"))
-
-    def get_action(self, state):
-        """
-        Get actions for a batch of states
-        """
-        # Convert to tensor if not already
-        state = tf.convert_to_tensor(state, dtype=tf.float32)
-        
-        # Add batch dimension if needed
-        if len(state.shape) == 4:
-            state = tf.expand_dims(state, axis=0)
-        
-        # Get action probabilities
-        action_probs = self.actor(state)
-        
-        # Sample actions using Gumbel-Softmax
-        actions = tf.random.categorical(tf.math.log(action_probs + 1e-10), 1)
-        actions = tf.squeeze(actions)
-        
-        # Convert to one-hot encoding
-        actions = tf.one_hot(actions, depth=self.num_actions)
-        
-        return actions
 
 def compute_reward(snr, sinr, interference_level):
     # Cast inputs to float32
