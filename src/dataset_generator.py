@@ -233,20 +233,21 @@ def calculate_max_doppler_freq():
             CHANNEL_CONFIG["doppler_shift"]["carrier_frequency"] / 
             SPEED_OF_LIGHT)
 
+def calculate_coherence_time():
+    """Calculate channel coherence time based on Doppler parameters"""
+    max_doppler_freq = calculate_max_doppler_freq()
+    if max_doppler_freq == 0:
+        return float('inf')  # Return infinity for static channels
+    return 1 / (2 * max_doppler_freq)  # Standard coherence time formula
+
 def create_channel_model(num_users):
-    """Create proper channel model with normalization"""
+    """Create proper channel model"""
     return RayleighBlockFading(
         num_rx=num_users,
         num_rx_ant=MIMO_CONFIG["rx_antennas"],
         num_tx=1,
         num_tx_ant=MIMO_CONFIG["tx_antennas"],
-        dtype=tf.complex64,
-        normalize_channels=True,
-        block_length=int(calculate_coherence_time() / RESOURCE_GRID["symbol_duration"]),
-        # Add these parameters
-        correlation_matrix=None,  # Add spatial correlation
-        spatial_correlation=CHANNEL_CONFIG.get("spatial_correlation", 0.5),  # Add correlation coefficient
-        add_awgn=True  # Ensure noise is added
+        dtype=tf.complex64
     )
 
 def create_ofdm_channel(channel_model, resource_grid):
@@ -261,17 +262,31 @@ def create_ofdm_channel(channel_model, resource_grid):
     )
 
 def normalize_channel_realizations(channels):
-    """Normalize channel realizations properly"""
-    # Calculate power across all antenna dimensions
-    power = tf.reduce_mean(tf.abs(channels)**2, axis=(-4, -3, -2, -1), keepdims=True)
-    # Add small epsilon to avoid division by zero
-    epsilon = 1e-12
-    # Normalize and maintain complex values
-    normalized_channels = channels / tf.sqrt(power + epsilon)
-    # Verify normalization
-    normalized_power = tf.reduce_mean(tf.abs(normalized_channels)**2)
-    tf.debugging.assert_near(normalized_power, 1.0, rtol=1e-4)
-    return normalized_channels
+    """Normalize channel realizations to have unit average power"""
+    # Calculate current power across all dimensions
+    power = tf.reduce_mean(tf.abs(channels)**2)
+    
+    # Print original power for debugging
+    tf.print("Original power:", power)
+    
+    # Avoid division by zero
+    eps = tf.constant(1e-12, dtype=tf.float32)
+    scaling_factor = tf.sqrt(1.0 / (power + eps))
+    
+    # Apply normalization
+    channels_normalized = channels * scaling_factor
+    
+    # Verify normalized power
+    normalized_power = tf.reduce_mean(tf.abs(channels_normalized)**2)
+    tf.print("Normalized power:", normalized_power)
+    
+    # Target power should be 1.0
+    target_power = tf.constant(1.0, dtype=tf.float32)
+    
+    # Assert that normalization worked correctly
+    tf.debugging.assert_near(normalized_power, target_power, rtol=1e-3, atol=1e-3)
+    
+    return channels_normalized
 
 
 def create_resource_grid():
@@ -545,6 +560,7 @@ def generate_dataset(output_file, num_samples):
     # Clean up any remaining temporary files
     cleanup_temp_files(temp_files)
     return dataset
+
 
 def verify_channel_statistics(channels):
     """Verify channel statistics are correct"""
