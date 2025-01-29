@@ -190,61 +190,100 @@ class TestDatasetGeneration(unittest.TestCase):
                 )
     def test_channel_data_generation(self):
         """Verify channel data generation properties"""
-        print("\nChannel Data Generation Test Results:")
-        print("=" * 50)
-        self._plot_channel_properties()
-        self._plot_correlation_matrices()
-
-        for name, dataset in self.datasets.items():
-            with self.subTest(dataset=name):
-                channel_data = dataset["channel_realizations"]
-                
-                # Calculate and print statistics
-                real_parts = np.real(channel_data)
-                imag_parts = np.imag(channel_data)
-                
-                print(f"\nDataset: {name}")
-                print(f"Real part - Mean: {np.mean(real_parts):.4f}, Std: {np.std(real_parts):.4f}")
-                print(f"Imaginary part - Mean: {np.mean(imag_parts):.4f}, Std: {np.std(imag_parts):.4f}")
-                
-                # Test for normal distribution using Kolmogorov-Smirnov test
-                _, p_value_real = ks_2samp(real_parts.flatten(), 
-                                        np.random.normal(0, 1, size=1000))
-                _, p_value_imag = ks_2samp(imag_parts.flatten(), 
-                                        np.random.normal(0, 1, size=1000))
-                
-                print(f"Normality test p-values - Real: {p_value_real:.4f}, Imaginary: {p_value_imag:.4f}")
-                
-                self.assertGreater(p_value_real, 0.05, 
-                                f"Real parts not normally distributed in {name}")
-                self.assertGreater(p_value_imag, 0.05, 
-                                f"Imaginary parts not normally distributed in {name}")
-                
-                # Test power normalization
-                channel_power = np.mean(np.abs(channel_data)**2)
-                print(f"Channel power: {channel_power:.4f}")
-                
-                self.assertAlmostEqual(channel_power, 1.0, delta=0.1,
-                                    msg=f"Channel power not normalized in {name}")
-                
-                # Generate and save distribution plots
+        try:
+            print("\nChannel Data Generation Test Results:")
+            print("=" * 50)
+            
+            # Create plot directories first
+            try:
                 os.makedirs("./plots/channel", exist_ok=True)
+            except OSError as e:
+                print(f"Error creating plot directories: {str(e)}")
+                raise
                 
-                # Plot real and imaginary distributions
-                plt.figure(figsize=(12, 5))
-                plt.subplot(1, 2, 1)
-                sns.histplot(real_parts.flatten(), stat='density', label='Real')
-                sns.kdeplot(np.random.normal(0, 1, 1000), label='Normal Dist')
-                plt.title(f"{name} - Real Part Distribution")
-                plt.legend()
-                
-                plt.subplot(1, 2, 2)
-                sns.histplot(imag_parts.flatten(), stat='density', label='Imaginary')
-                sns.kdeplot(np.random.normal(0, 1, 1000), label='Normal Dist')
-                plt.title(f"{name} - Imaginary Part Distribution")
-                plt.legend()
-                plt.savefig(f"./plots/channel/{name}_channel_distribution.png")
-                plt.close()
+            # Generate plots with error handling
+            try:
+                self._plot_channel_properties()
+                self._plot_correlation_matrices()
+            except Exception as e:
+                print(f"Error generating plots: {str(e)}")
+                raise
+
+            for name, dataset in self.datasets.items():
+                with self.subTest(dataset=name):
+                    try:
+                        channel_data = dataset["channel_realizations"]
+                        
+                        # Calculate and print statistics
+                        real_parts = np.real(channel_data)
+                        imag_parts = np.imag(channel_data)
+                        
+                        print(f"\nDataset: {name}")
+                        print(f"Real part - Mean: {np.mean(real_parts):.4f}, Std: {np.std(real_parts):.4f}")
+                        print(f"Imaginary part - Mean: {np.mean(imag_parts):.4f}, Std: {np.std(imag_parts):.4f}")
+                        
+                        # Test for normal distribution using Kolmogorov-Smirnov test
+                        try:
+                            _, p_value_real = ks_2samp(real_parts.flatten(), 
+                                                    np.random.normal(0, 1, size=1000))
+                            _, p_value_imag = ks_2samp(imag_parts.flatten(), 
+                                                    np.random.normal(0, 1, size=1000))
+                        except Exception as e:
+                            print(f"Error in statistical tests for {name}: {str(e)}")
+                            raise
+                        
+                        print(f"Normality test p-values - Real: {p_value_real:.4f}, Imaginary: {p_value_imag:.4f}")
+                        
+                        self.assertGreater(p_value_real, 0.05, 
+                                        f"Real parts not normally distributed in {name}")
+                        self.assertGreater(p_value_imag, 0.05, 
+                                        f"Imaginary parts not normally distributed in {name}")
+                        
+                        # Test power normalization
+                        try:
+                            channel_power = np.mean(np.abs(channel_data)**2)
+                            print(f"Channel power: {channel_power:.4f}")
+                        except Exception as e:
+                            print(f"Error calculating channel power for {name}: {str(e)}")
+                            raise
+                        
+                        self.assertAlmostEqual(channel_power, 1.0, delta=0.1,
+                                            msg=f"Channel power not normalized in {name}")
+                        
+                        # Generate and save plots
+                        try:
+                            plt.figure(figsize=(12, 5))
+                            plt.subplot(1, 2, 1)
+                            sns.histplot(real_parts.flatten(), stat='density', label='Real')
+                            sns.kdeplot(np.random.normal(0, 1, 1000), label='Normal Dist')
+                            plt.title(f"{name} - Real Part Distribution")
+                            plt.legend()
+                            
+                            plt.subplot(1, 2, 2)
+                            sns.histplot(imag_parts.flatten(), stat='density', label='Imaginary')
+                            sns.kdeplot(np.random.normal(0, 1, 1000), label='Normal Dist')
+                            plt.title(f"{name} - Imaginary Part Distribution")
+                            plt.legend()
+                            plt.savefig(f"./plots/channel/{name}_channel_distribution.png")
+                            plt.close()
+                        except Exception as e:
+                            print(f"Error generating plots for {name}: {str(e)}")
+                            plt.close()  # Ensure figure is closed even if there's an error
+                            raise
+                            
+                    except KeyError as e:
+                        print(f"Missing key in dataset {name}: {str(e)}")
+                        raise
+                    except Exception as e:
+                        print(f"Error processing dataset {name}: {str(e)}")
+                        raise
+                        
+        except Exception as e:
+            print(f"Fatal error in test_channel_data_generation: {str(e)}")
+            raise
+        finally:
+            # Ensure all plots are closed
+            plt.close('all')
 
     def test_data_normalization(self):
         """Check for proper data normalization"""
